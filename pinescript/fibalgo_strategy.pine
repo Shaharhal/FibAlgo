@@ -1,0 +1,247 @@
+//@version=6
+strategy("FibAlgo Strategy", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1)
+
+// ============================================================================
+// USER INPUTS
+// ============================================================================
+
+// Pivot Detection
+pivotLen = input.int(5, "Pivot Sensitivity Length", minval=1, maxval=50, group="Swing Detection")
+
+// Risk Management
+riskPercent = input.float(1.0, "Risk % Per Trade", minval=0.1, maxval=5.0, step=0.1, group="Risk Management")
+atrLen = input.int(14, "ATR Length", minval=1, group="Risk Management")
+atrMult = input.float(0.5, "ATR Multiplier for SL Buffer", minval=0.1, maxval=2.0, step=0.1, group="Risk Management")
+minRR = input.float(1.5, "Minimum R:R Ratio", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+
+// Fibonacci Levels
+useFib236 = input.bool(true, "Use 23.6%", group="Fibonacci Retracements")
+useFib382 = input.bool(true, "Use 38.2%", group="Fibonacci Retracements")
+useFib500 = input.bool(true, "Use 50.0%", group="Fibonacci Retracements")
+useFib618 = input.bool(true, "Use 61.8%", group="Fibonacci Retracements")
+useFib786 = input.bool(true, "Use 78.6%", group="Fibonacci Retracements")
+
+useExt127 = input.bool(true, "Use 127.2%", group="Fibonacci Extensions")
+useExt162 = input.bool(true, "Use 161.8%", group="Fibonacci Extensions")
+useExt262 = input.bool(true, "Use 261.8%", group="Fibonacci Extensions")
+
+// Partial Exits
+partialExitPct = input.int(50, "Partial Exit % at TP1", minval=10, maxval=90, step=5, group="Exit Strategy")
+
+// Trend Confirmation
+trendEmaLen = input.int(200, "Trend EMA Length", minval=10, group="Trend Confirmation")
+htfTimeframe = input.timeframe("D", "Higher Timeframe", group="Trend Confirmation")
+
+// ============================================================================
+// INDICATORS
+// ============================================================================
+
+// ATR for volatility
+atrVal = ta.atr(atrLen)
+
+// EMA for trend
+ema200 = ta.ema(close, trendEmaLen)
+
+// Higher Timeframe Data
+htfClose = request.security(syminfo.tickerid, htfTimeframe, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfEma = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, trendEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+
+// ============================================================================
+// SWING POINT DETECTION
+// ============================================================================
+
+// Detect pivots
+pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+
+// Store swing points with var
+var float swingHighPrice = na
+var int swingHighBar = na
+var float swingLowPrice = na
+var int swingLowBar = na
+
+// Store previous swing points for structure analysis
+var float prevSwingHighPrice = na
+var float prevSwingLowPrice = na
+
+// Update swing points when new pivots are confirmed
+if not na(pivotHigh)
+    prevSwingHighPrice := swingHighPrice
+    swingHighPrice := pivotHigh
+    swingHighBar := bar_index - pivotLen
+
+if not na(pivotLow)
+    prevSwingLowPrice := swingLowPrice
+    swingLowPrice := pivotLow
+    swingLowBar := bar_index - pivotLen
+
+// ============================================================================
+// SWING TREND DETERMINATION
+// ============================================================================
+
+// Determine if we have valid swing structure
+bool hasValidSwings = not na(swingHighPrice) and not na(swingLowPrice) and not na(prevSwingHighPrice) and not na(prevSwingLowPrice)
+
+// Uptrend: Higher Highs and Higher Lows
+bool swingUptrend = hasValidSwings and swingHighPrice > prevSwingHighPrice and swingLowPrice > prevSwingLowPrice
+
+// Downtrend: Lower Highs and Lower Lows
+bool swingDowntrend = hasValidSwings and swingHighPrice < prevSwingHighPrice and swingLowPrice < prevSwingLowPrice
+
+// ============================================================================
+// FIBONACCI LEVEL CALCULATION
+// ============================================================================
+
+var float fib236 = na
+var float fib382 = na
+var float fib500 = na
+var float fib618 = na
+var float fib786 = na
+var float ext127 = na
+var float ext162 = na
+var float ext262 = na
+
+// Calculate Fibonacci levels based on swing trend
+if hasValidSwings
+    if swingUptrend
+        // Uptrend: retracement from swing low to swing high
+        float swingRange = swingHighPrice - swingLowPrice
+        fib236 := swingHighPrice - swingRange * 0.236
+        fib382 := swingHighPrice - swingRange * 0.382
+        fib500 := swingHighPrice - swingRange * 0.500
+        fib618 := swingHighPrice - swingRange * 0.618
+        fib786 := swingHighPrice - swingRange * 0.786
+        // Extensions
+        ext127 := swingLowPrice + swingRange * 1.272
+        ext162 := swingLowPrice + swingRange * 1.618
+        ext262 := swingLowPrice + swingRange * 2.618
+    else if swingDowntrend
+        // Downtrend: retracement from swing high to swing low
+        float swingRange = swingHighPrice - swingLowPrice
+        fib236 := swingLowPrice + swingRange * 0.236
+        fib382 := swingLowPrice + swingRange * 0.382
+        fib500 := swingLowPrice + swingRange * 0.500
+        fib618 := swingLowPrice + swingRange * 0.618
+        fib786 := swingLowPrice + swingRange * 0.786
+        // Extensions
+        ext127 := swingHighPrice - swingRange * 1.272
+        ext162 := swingHighPrice - swingRange * 1.618
+        ext262 := swingHighPrice - swingRange * 2.618
+
+// ============================================================================
+// TREND CONFIRMATION
+// ============================================================================
+
+bool currentTfBullish = close > ema200
+bool currentTfBearish = close < ema200
+bool htfBullish = htfClose > htfEma
+bool htfBearish = htfClose < htfEma
+
+bool trendBullish = currentTfBullish and htfBullish
+bool trendBearish = currentTfBearish and htfBearish
+
+// ============================================================================
+// ENTRY LOGIC
+// ============================================================================
+
+// Long Entry Conditions
+bool inGoldenZoneLong = not na(fib618) and not na(fib382) and low <= fib618 and close >= fib382
+bool bullishCandle = close > open
+bool longCondition = swingUptrend and inGoldenZoneLong and trendBullish and bullishCandle and strategy.position_size == 0
+
+// Short Entry Conditions
+bool inGoldenZoneShort = not na(fib618) and not na(fib382) and high >= fib618 and close <= fib382
+bool bearishCandle = close < open
+bool shortCondition = swingDowntrend and inGoldenZoneShort and trendBearish and bearishCandle and strategy.position_size == 0
+
+// ============================================================================
+// POSITION SIZING & RISK CALCULATION
+// ============================================================================
+
+// Long position sizing
+float longStopLoss = na
+float longTakeProfit1 = na
+float longTakeProfit2 = na
+float longLotSize = na
+float longRR = na
+
+if longCondition and not na(swingLowPrice) and not na(ext127) and not na(ext162)
+    longStopLoss := swingLowPrice - atrVal * atrMult
+    float stopDistance = close - longStopLoss
+    if stopDistance > 0
+        float riskAmount = strategy.equity * (riskPercent / 100)
+        longLotSize := math.floor(riskAmount / stopDistance)
+        longLotSize := math.max(1, longLotSize)
+        longTakeProfit1 := ext127
+        longTakeProfit2 := ext162
+        longRR := (longTakeProfit1 - close) / stopDistance
+
+// Short position sizing
+float shortStopLoss = na
+float shortTakeProfit1 = na
+float shortTakeProfit2 = na
+float shortLotSize = na
+float shortRR = na
+
+if shortCondition and not na(swingHighPrice) and not na(ext127) and not na(ext162)
+    shortStopLoss := swingHighPrice + atrVal * atrMult
+    float stopDistance = shortStopLoss - close
+    if stopDistance > 0
+        float riskAmount = strategy.equity * (riskPercent / 100)
+        shortLotSize := math.floor(riskAmount / stopDistance)
+        shortLotSize := math.max(1, shortLotSize)
+        shortTakeProfit1 := ext127
+        shortTakeProfit2 := ext162
+        shortRR := (close - shortTakeProfit1) / stopDistance
+
+// ============================================================================
+// STRATEGY ENTRIES
+// ============================================================================
+
+// Enter Long
+if longCondition and not na(longRR) and longRR >= minRR
+    strategy.entry("Long", strategy.long, qty=longLotSize)
+    // Set exits
+    strategy.exit("TP1", from_entry="Long", qty_percent=partialExitPct, limit=longTakeProfit1, stop=longStopLoss)
+    float trailPoints = atrVal * 2 / syminfo.mintick
+    float trailOffset = atrVal * 1 / syminfo.mintick
+    strategy.exit("TP2", from_entry="Long", qty_percent=100, limit=longTakeProfit2, stop=longStopLoss, trail_points=trailPoints, trail_offset=trailOffset)
+
+// Enter Short
+if shortCondition and not na(shortRR) and shortRR >= minRR
+    strategy.entry("Short", strategy.short, qty=shortLotSize)
+    // Set exits
+    strategy.exit("TP1", from_entry="Short", qty_percent=partialExitPct, limit=shortTakeProfit1, stop=shortStopLoss)
+    float trailPoints = atrVal * 2 / syminfo.mintick
+    float trailOffset = atrVal * 1 / syminfo.mintick
+    strategy.exit("TP2", from_entry="Short", qty_percent=100, limit=shortTakeProfit2, stop=shortStopLoss, trail_points=trailPoints, trail_offset=trailOffset)
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Plot EMA
+plot(ema200, "EMA 200", color=color.blue, linewidth=2)
+
+// Plot Fibonacci Retracement Levels
+plot(useFib236 ? fib236 : na, "Fib 23.6%", color=color.new(color.gray, 70), style=plot.style_linebr)
+plot(useFib382 ? fib382 : na, "Fib 38.2%", color=color.new(color.green, 50), style=plot.style_linebr, linewidth=1)
+plot(useFib500 ? fib500 : na, "Fib 50.0%", color=color.new(color.yellow, 50), style=plot.style_linebr)
+plot(useFib618 ? fib618 : na, "Fib 61.8%", color=color.new(color.orange, 50), style=plot.style_linebr, linewidth=1)
+plot(useFib786 ? fib786 : na, "Fib 78.6%", color=color.new(color.gray, 70), style=plot.style_linebr)
+
+// Plot Fibonacci Extension Levels
+plot(useExt127 ? ext127 : na, "Ext 127.2%", color=color.new(color.purple, 50), style=plot.style_linebr, linewidth=2)
+plot(useExt162 ? ext162 : na, "Ext 161.8%", color=color.new(color.fuchsia, 50), style=plot.style_linebr, linewidth=2)
+plot(useExt262 ? ext262 : na, "Ext 261.8%", color=color.new(color.red, 70), style=plot.style_linebr)
+
+// Plot Entry Signals
+plotshape(longCondition and not na(longRR) and longRR >= minRR, "Long Entry", shape.triangleup, location.belowbar, color=color.new(color.green, 0), size=size.small)
+plotshape(shortCondition and not na(shortRR) and shortRR >= minRR, "Short Entry", shape.triangledown, location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// Background color when in position
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na)
+
+// Plot swing points for reference
+plotshape(not na(pivotHigh), "Swing High", shape.diamond, location.abovebar, color=color.new(color.red, 40), size=size.tiny, offset=-pivotLen)
+plotshape(not na(pivotLow), "Swing Low", shape.diamond, location.belowbar, color=color.new(color.green, 40), size=size.tiny, offset=-pivotLen)
