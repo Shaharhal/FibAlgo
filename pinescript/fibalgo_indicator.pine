@@ -1,41 +1,103 @@
 //@version=6
 indicator("FibAlgo", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=50, max_bars_back=5000)
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // INPUTS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
-pivotLen       = input.int(5, "Pivot Length", minval=2, maxval=20, group="Swing Detection")
+// Swing Detection
+autoPivot      = input.bool(true, "Auto Pivot (by timeframe)", group="Swing Detection")
+pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group="Swing Detection", tooltip="Only used when Auto Pivot is off")
 
-accountSize    = input.float(100000, "Account Size ($)", minval=100, group="Risk Management")
+// Risk Management
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
 atrMult        = input.float(0.5, "ATR SL Buffer", minval=0.1, maxval=2.0, step=0.1, group="Risk Management")
-minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+minRR          = input.float(2.5, "Min R:R", minval=1.0, maxval=5.0, step=0.1, group="Risk Management")
 partialExitPct = input.float(50.0, "TP1 Exit %", minval=10, maxval=90, step=5, group="Risk Management")
 
-trendEmaLen    = input.int(21, "Fast EMA", minval=5, group="Trend")
-emaSlowLen     = input.int(50, "Slow EMA", minval=10, group="Trend")
+// Trend
+emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
+sma50Len       = input.int(50, "SMA 50", minval=10, group="Trend")
+sma150Len      = input.int(150, "SMA 150 (Direction)", minval=50, group="Trend")
 
+// Display
 showFibs       = input.bool(true, "Show Fib Lines", group="Display")
 showDashboard  = input.bool(true, "Show Dashboard", group="Display")
 showSignals    = input.bool(true, "Show BUY/SELL Labels", group="Display")
 showSwings     = input.bool(true, "Show Swing Markers", group="Display")
+showMAs        = input.bool(true, "Show MA Lines", group="Display")
+dashSize       = input.string("normal", "Dashboard Text Size", options=["tiny", "small", "normal", "large"], group="Display")
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // CORE CALCULATIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
-atrVal  = ta.atr(atrLen)
-emaFast = ta.ema(close, trendEmaLen)
-emaSlow = ta.ema(close, emaSlowLen)
+atrVal   = ta.atr(atrLen)
+ema21    = ta.ema(close, emaFastLen)
+sma50    = ta.sma(close, sma50Len)
+sma150   = ta.sma(close, sma150Len)
+rsiVal   = ta.rsi(close, 14)
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// Plot MAs
+plot(showMAs ? ema21 : na, "EMA 21", color.new(#00BCD4, 0), 2)
+plot(showMAs ? sma50 : na, "SMA 50", color.new(#FF5722, 0), 2)
+plot(showMAs ? sma150 : na, "SMA 150", color.new(#FFEB3B, 40), 1)
+
+// Auto pivot by timeframe
+autoLen = timeframe.isintraday ?
+     (timeframe.multiplier <= 5 ? 10 :
+      timeframe.multiplier <= 15 ? 8 :
+      timeframe.multiplier <= 60 ? 6 :
+      timeframe.multiplier <= 240 ? 5 : 5) :
+     (timeframe.period == "D" ? 5 :
+      timeframe.period == "W" ? 3 : 3)
+
+actualPivotLen = autoPivot ? autoLen : pivotLen
+
+// =============================================================================
+// AVWAP FROM 52-WEEK HIGH
+// =============================================================================
+
+daily52WH = request.security(syminfo.tickerid, "D", ta.highest(high, 252), barmerge.gaps_off, barmerge.lookahead_off)
+
+var float avwapPrev52 = na
+var float cumVol      = 0.0
+var float cumVolPrice = 0.0
+
+bool new52WH = not na(daily52WH) and (na(avwapPrev52) or daily52WH > avwapPrev52)
+
+if new52WH
+    avwapPrev52 := daily52WH
+    cumVol      := volume
+    cumVolPrice := hlc3 * volume
+else
+    cumVol      += volume
+    cumVolPrice += hlc3 * volume
+
+float avwap52 = cumVol > 0 ? cumVolPrice / cumVol : na
+
+plot(avwap52, "AVWAP 52WH", color.new(color.purple, 20), 2, plot.style_line)
+
+// AVWAP x SMA 50 golden cross
+bool avwapGoldenX = not na(avwap52) and ta.crossover(avwap52, sma50)
+bool avwapDeathX  = not na(avwap52) and ta.crossunder(avwap52, sma50)
+
+plotchar(avwapGoldenX, "AVWAP Golden Cross", "★", location.belowbar, color.new(color.yellow, 0), size=size.small)
+plotchar(avwapDeathX, "AVWAP Death Cross", "★", location.abovebar, color.new(color.red, 0), size=size.small)
+
+// =============================================================================
+// RELATIVE STRENGTH
+// =============================================================================
+
+rsRank = ta.percentrank(close, 252)
+
+// =============================================================================
 // SWING DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
-pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
-pivotLow  = ta.pivotlow(low, pivotLen, pivotLen)
+pivotHigh = ta.pivothigh(high, actualPivotLen, actualPivotLen)
+pivotLow  = ta.pivotlow(low, actualPivotLen, actualPivotLen)
 
 var float swHigh    = na
 var int   swHighBar = na
@@ -47,24 +109,29 @@ newSwing := false
 
 if not na(pivotHigh)
     swHigh    := pivotHigh
-    swHighBar := bar_index - pivotLen
+    swHighBar := bar_index - actualPivotLen
     newSwing  := true
 
 if not na(pivotLow)
     swLow    := pivotLow
-    swLowBar := bar_index - pivotLen
+    swLowBar := bar_index - actualPivotLen
     newSwing := true
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TREND
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// TREND DIRECTION — SMA 150 is king
+// =============================================================================
 
-bool isBull = close > emaSlow
-bool isBear = close < emaSlow
+bool aboveSMA150 = not na(sma150) and close > sma150
+bool belowSMA150 = not na(sma150) and close < sma150
+bool emaAboveSMA = ema21 > sma50
+bool emaBelowSMA = ema21 < sma50
 
-// ═══════════════════════════════════════════════════════════════════════════════
+bool isBull = aboveSMA150 and emaAboveSMA
+bool isBear = belowSMA150 and emaBelowSMA
+
+// =============================================================================
 // FIBONACCI LEVELS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 bool hasSwings = not na(swHigh) and not na(swLow) and swHigh > swLow
 float swRange  = hasSwings ? swHigh - swLow : na
@@ -88,35 +155,46 @@ if hasSwings
 
 float atrPct = not na(atrVal) and close > 0 ? (atrVal / close) * 100 : na
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SL / TP / SIZING (always calculated for dashboard)
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// SL / TP — VALIDATED
+// =============================================================================
 
-float longSL  = hasSwings ? swLow - nz(atrVal) * atrMult : na
-float shortSL = hasSwings ? swHigh + nz(atrVal) * atrMult : na
+float longSLraw  = hasSwings ? swLow - nz(atrVal) * atrMult : na
+float shortSLraw = hasSwings ? swHigh + nz(atrVal) * atrMult : na
 
-float longTP1  = ext127
-float longTP2  = ext162
-float shortTP1 = hasSwings ? swLow - swRange * 0.272 : na
-float shortTP2 = hasSwings ? swLow - swRange * 0.618 : na
+// Long SL MUST be below price, Short SL MUST be above price
+float longSL  = not na(longSLraw) and longSLraw < close ? longSLraw : na
+float shortSL = not na(shortSLraw) and shortSLraw > close ? shortSLraw : na
 
+// TP levels
+float longTP1raw  = ext127
+float longTP2raw  = ext162
+float shortTP1raw = hasSwings ? swLow - swRange * 0.272 : na
+float shortTP2raw = hasSwings ? swLow - swRange * 0.618 : na
+
+float longTP1  = not na(longTP1raw) and longTP1raw > close ? longTP1raw : na
+float longTP2  = not na(longTP2raw) and longTP2raw > close ? longTP2raw : na
+float shortTP1 = not na(shortTP1raw) and shortTP1raw < close ? shortTP1raw : na
+float shortTP2 = not na(shortTP2raw) and shortTP2raw < close ? shortTP2raw : na
+
+// Qty & R:R (always calculated for dashboard)
 float longQty  = not na(longSL) and (close - longSL) > 0 ? math.max(1, math.floor(maxLossDollars / (close - longSL))) : na
 float shortQty = not na(shortSL) and (shortSL - close) > 0 ? math.max(1, math.floor(maxLossDollars / (shortSL - close))) : na
+float longRR   = not na(longTP1) and not na(longSL) and (close - longSL) > 0 ? (longTP1 - close) / (close - longSL) : na
+float shortRR  = not na(shortTP1) and not na(shortSL) and (shortSL - close) > 0 ? (close - shortTP1) / (shortSL - close) : na
 
-float longRR  = not na(longTP1) and not na(longSL) and (close - longSL) > 0 ? (longTP1 - close) / (close - longSL) : na
-float shortRR = not na(shortTP1) and not na(shortSL) and (shortSL - close) > 0 ? (close - shortTP1) / (shortSL - close) : na
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ENTRY SIGNALS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// ENTRY SIGNALS — Golden Zone + trend alignment
+// =============================================================================
 
 var bool longActive  = false
 var bool shortActive = false
 
-bool longEntry  = hasSwings and isBull and low <= fib236 and close >= fib786 and close > open and not longActive
-bool shortEntry = hasSwings and isBear and high >= fib786 and close <= fib236 and close < open and not shortActive
+bool goldenTouch = hasSwings and low <= fib382 and high >= fib618
 
-// Filter by R:R
+bool longEntry  = goldenTouch and isBull and close > open and close >= fib618 and not na(longSL) and not longActive
+bool shortEntry = goldenTouch and isBear and close < open and close <= fib382 and not na(shortSL) and not shortActive
+
 bool validLong  = longEntry and not na(longRR) and longRR >= minRR
 bool validShort = shortEntry and not na(shortRR) and shortRR >= minRR
 
@@ -128,14 +206,48 @@ if validShort
     shortActive := true
     longActive  := false
 
-// Reset on new swing
 if newSwing
     longActive  := false
     shortActive := false
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// VISUALS — FIB LINES (RED = resistance, BLUE = support)
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// CONVICTION SCORING (0-100%)
+// =============================================================================
+
+float bullPts = 0.0
+float bearPts = 0.0
+
+bullPts += not na(sma150) and close > sma150 ? 20 : 0
+bearPts += not na(sma150) and close < sma150 ? 20 : 0
+
+bullPts += ema21 > sma50 ? 15 : 0
+bearPts += ema21 < sma50 ? 15 : 0
+
+bullPts += close > ema21 ? 10 : 0
+bearPts += close < ema21 ? 10 : 0
+
+bullPts += close > sma50 ? 10 : 0
+bearPts += close < sma50 ? 10 : 0
+
+bullPts += rsiVal > 50 and rsiVal < 70 ? 10 : 0
+bearPts += rsiVal < 50 and rsiVal > 30 ? 10 : 0
+
+bullPts += hasSwings and close >= fib618 and close <= fib382 and isBull ? 15 : 0
+bearPts += hasSwings and close >= fib618 and close <= fib382 and isBear ? 15 : 0
+
+bullPts += not na(avwap52) and close > avwap52 ? 10 : 0
+bearPts += not na(avwap52) and close < avwap52 ? 10 : 0
+
+bullPts += close > open ? 10 : 0
+bearPts += close < open ? 10 : 0
+
+float convPct = math.max(bullPts, bearPts)
+string convDir = bullPts > bearPts ? "Bullish" : bullPts < bearPts ? "Bearish" : "Neutral"
+color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red : color.gray
+
+// =============================================================================
+// VISUALS — FIB LINES
+// =============================================================================
 
 var line ln236 = na, var label lb236 = na
 var line ln382 = na, var label lb382 = na
@@ -175,15 +287,15 @@ if showFibs and redraw and hasSwings
     [l1, lb1] = drawFibLine(fib236, "23.6%", c236, 1, false)
     ln236 := l1, lb236 := lb1
 
-    c382 = close < fib382 ? color.new(color.red, 20) : color.new(color.blue, 20)
+    c382 = close < fib382 ? color.new(color.red, 10) : color.new(color.blue, 10)
     [l2, lb2] = drawFibLine(fib382, "38.2%", c382, 2, false)
     ln382 := l2, lb382 := lb2
 
-    c500 = close < fib500 ? color.new(color.red, 30) : color.new(color.blue, 30)
-    [l3, lb3] = drawFibLine(fib500, "50%", c500, 1, false)
+    c500 = close < fib500 ? color.new(color.red, 20) : color.new(color.blue, 20)
+    [l3, lb3] = drawFibLine(fib500, "50%", c500, 2, false)
     ln500 := l3, lb500 := lb3
 
-    c618 = close < fib618 ? color.new(color.red, 20) : color.new(color.blue, 20)
+    c618 = close < fib618 ? color.new(color.red, 10) : color.new(color.blue, 10)
     [l4, lb4] = drawFibLine(fib618, "61.8%", c618, 2, false)
     ln618 := l4, lb618 := lb4
 
@@ -192,35 +304,57 @@ if showFibs and redraw and hasSwings
     ln786 := l5, lb786 := lb5
 
     if not na(ext127)
-        [le1, lbe1] = drawFibLine(ext127, "127.2%", color.new(color.red, 20), 1, true)
+        [le1, lbe1] = drawFibLine(ext127, "127.2%", color.new(color.green, 20), 1, true)
         lnE127 := le1, lbE127 := lbe1
     if not na(ext162)
-        [le2, lbe2] = drawFibLine(ext162, "161.8%", color.new(color.red, 20), 1, true)
+        [le2, lbe2] = drawFibLine(ext162, "161.8%", color.new(color.green, 20), 1, true)
         lnE162 := le2, lbE162 := lbe2
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 // VISUALS — SWING MARKERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
 if showSwings and not na(pivotHigh)
-    label.new(bar_index - pivotLen, high[pivotLen], "▼", style=label.style_none, textcolor=color.red, size=size.small)
+    label.new(bar_index - actualPivotLen, high[actualPivotLen], "▼", style=label.style_none, textcolor=color.red, size=size.small)
 
 if showSwings and not na(pivotLow)
-    label.new(bar_index - pivotLen, low[pivotLen], "▲", style=label.style_none, textcolor=color.green, size=size.small)
+    label.new(bar_index - actualPivotLen, low[actualPivotLen], "▲", style=label.style_none, textcolor=color.green, size=size.small)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// VISUALS — BUY / SELL LABELS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// VISUALS — LIVE & CONFIRMED BUY/SELL LABELS
+// =============================================================================
+
+// Live signals: show during bar formation (tentative)
+// Confirmed signals: show after bar closes (extra conviction)
+// On historical bars, barstate.isconfirmed is always true → all show as confirmed
+
+var label liveBuyLbl  = na
+var label liveSellLbl = na
+
+// Clean up live labels at start of new bar
+if barstate.isnew
+    label.delete(liveBuyLbl)
+    label.delete(liveSellLbl)
 
 if showSignals and validLong
-    label.new(bar_index, low, "BUY", style=label.style_label_up, color=color.new(color.blue, 10), textcolor=color.white, size=size.normal)
+    if barstate.isconfirmed
+        label.delete(liveBuyLbl)
+        label.new(bar_index, low, "BUY ✓", style=label.style_label_up, color=color.new(color.blue, 10), textcolor=color.white, size=size.normal)
+    else
+        label.delete(liveBuyLbl)
+        liveBuyLbl := label.new(bar_index, low, "BUY", style=label.style_label_up, color=color.new(color.blue, 40), textcolor=color.white, size=size.normal)
 
 if showSignals and validShort
-    label.new(bar_index, high, "SELL", style=label.style_label_down, color=color.new(color.orange, 10), textcolor=color.white, size=size.normal)
+    if barstate.isconfirmed
+        label.delete(liveSellLbl)
+        label.new(bar_index, high, "SELL ✓", style=label.style_label_down, color=color.new(color.orange, 10), textcolor=color.white, size=size.normal)
+    else
+        label.delete(liveSellLbl)
+        liveSellLbl := label.new(bar_index, high, "SELL", style=label.style_label_down, color=color.new(color.orange, 40), textcolor=color.white, size=size.normal)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// VISUALS — SL/TP LINES on entry
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// VISUALS — SL/TP LINES on signal
+// =============================================================================
 
 var line slLine  = na, var label slLab  = na
 var line tp1Line = na, var label tp1Lab = na
@@ -232,10 +366,12 @@ if validLong
     line.delete(tp2Line), label.delete(tp2Lab)
     slLine  := line.new(bar_index, longSL, bar_index + 20, longSL, color=color.red, width=1, style=line.style_dotted, extend=extend.right)
     slLab   := label.new(bar_index + 3, longSL, "SL " + str.tostring(longSL, format.mintick), style=label.style_none, textcolor=color.red, size=size.tiny)
-    tp1Line := line.new(bar_index, longTP1, bar_index + 20, longTP1, color=color.green, width=1, style=line.style_dotted, extend=extend.right)
-    tp1Lab  := label.new(bar_index + 3, longTP1, "TP1 " + str.tostring(longTP1, format.mintick), style=label.style_none, textcolor=color.green, size=size.tiny)
-    tp2Line := line.new(bar_index, longTP2, bar_index + 20, longTP2, color=color.lime, width=1, style=line.style_dotted, extend=extend.right)
-    tp2Lab  := label.new(bar_index + 3, longTP2, "TP2 " + str.tostring(longTP2, format.mintick), style=label.style_none, textcolor=color.lime, size=size.tiny)
+    if not na(longTP1)
+        tp1Line := line.new(bar_index, longTP1, bar_index + 20, longTP1, color=color.green, width=1, style=line.style_dotted, extend=extend.right)
+        tp1Lab  := label.new(bar_index + 3, longTP1, "TP1 " + str.tostring(longTP1, format.mintick), style=label.style_none, textcolor=color.green, size=size.tiny)
+    if not na(longTP2)
+        tp2Line := line.new(bar_index, longTP2, bar_index + 20, longTP2, color=color.lime, width=1, style=line.style_dotted, extend=extend.right)
+        tp2Lab  := label.new(bar_index + 3, longTP2, "TP2 " + str.tostring(longTP2, format.mintick), style=label.style_none, textcolor=color.lime, size=size.tiny)
 
 if validShort
     line.delete(slLine), label.delete(slLab)
@@ -243,76 +379,106 @@ if validShort
     line.delete(tp2Line), label.delete(tp2Lab)
     slLine  := line.new(bar_index, shortSL, bar_index + 20, shortSL, color=color.red, width=1, style=line.style_dotted, extend=extend.right)
     slLab   := label.new(bar_index + 3, shortSL, "SL " + str.tostring(shortSL, format.mintick), style=label.style_none, textcolor=color.red, size=size.tiny)
-    tp1Line := line.new(bar_index, shortTP1, bar_index + 20, shortTP1, color=color.green, width=1, style=line.style_dotted, extend=extend.right)
-    tp1Lab  := label.new(bar_index + 3, shortTP1, "TP1 " + str.tostring(shortTP1, format.mintick), style=label.style_none, textcolor=color.green, size=size.tiny)
-    tp2Line := line.new(bar_index, shortTP2, bar_index + 20, shortTP2, color=color.lime, width=1, style=line.style_dotted, extend=extend.right)
-    tp2Lab  := label.new(bar_index + 3, shortTP2, "TP2 " + str.tostring(shortTP2, format.mintick), style=label.style_none, textcolor=color.lime, size=size.tiny)
+    if not na(shortTP1)
+        tp1Line := line.new(bar_index, shortTP1, bar_index + 20, shortTP1, color=color.green, width=1, style=line.style_dotted, extend=extend.right)
+        tp1Lab  := label.new(bar_index + 3, shortTP1, "TP1 " + str.tostring(shortTP1, format.mintick), style=label.style_none, textcolor=color.green, size=size.tiny)
+    if not na(shortTP2)
+        tp2Line := line.new(bar_index, shortTP2, bar_index + 20, shortTP2, color=color.lime, width=1, style=line.style_dotted, extend=extend.right)
+        tp2Lab  := label.new(bar_index + 3, shortTP2, "TP2 " + str.tostring(shortTP2, format.mintick), style=label.style_none, textcolor=color.lime, size=size.tiny)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DASHBOARD — FTI style (bottom-left, blue)
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
+// DASHBOARD
+// =============================================================================
+
+dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 10, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
+    var table dash = table.new(position.bottom_left, 2, 15, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
 
-    table.cell(dash, 0, 0, "FibAlgo", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 20))
-    table.cell(dash, 1, 0, "INDICATOR", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 20))
+    // Header
+    table.cell(dash, 0, 0, "FibAlgo", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
+    table.cell(dash, 1, 0, "INDICATOR", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
+
+    // Conviction
+    table.cell(dash, 0, 1, "Conviction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 1, str.tostring(convPct, "#") + "% " + convDir, text_color=convCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // Direction
-    string dir = isBull ? "Long" : isBear ? "Short" : "Neutral"
+    string dir = isBull ? "Bullish" : isBear ? "Bearish" : "Neutral"
     color dirCol = isBull ? color.green : isBear ? color.red : color.gray
-    table.cell(dash, 0, 1, "Direction", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 1, dir, text_color=dirCol, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 2, "Direction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 2, dir, text_color=dirCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
+    // RS Rank
+    color rsCol = not na(rsRank) and rsRank > 70 ? color.green : not na(rsRank) and rsRank > 30 ? color.yellow : color.red
+    table.cell(dash, 0, 3, "RS Rank", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 3, not na(rsRank) ? str.tostring(rsRank, "#.#") : "—", text_color=rsCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // Price
-    table.cell(dash, 0, 2, "Price", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 2, str.tostring(close, format.mintick), text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 4, "Price", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 4, str.tostring(close, format.mintick), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // Qty
     float qty = isBull ? longQty : shortQty
-    table.cell(dash, 0, 3, "Qty (auto)", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 3, not na(qty) ? str.tostring(qty, "#") : "—", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 5, "Qty (auto)", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 5, not na(qty) ? str.tostring(qty, "#") : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // Max Loss
-    table.cell(dash, 0, 4, "Max Loss", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 4, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 6, "Max Loss", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 6, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // SL Long
-    table.cell(dash, 0, 5, "SL Long", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 5, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 7, "SL Long", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 7, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // SL Short
-    table.cell(dash, 0, 6, "SL Short", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 6, not na(shortSL) ? str.tostring(shortSL, format.mintick) : "—", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 8, "SL Short", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 8, not na(shortSL) ? str.tostring(shortSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // TP1 / TP2
     float dTP1 = isBull ? longTP1 : shortTP1
     float dTP2 = isBull ? longTP2 : shortTP2
-    table.cell(dash, 0, 7, "TP1 / TP2", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 9, "TP1 / TP2", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     t1s = not na(dTP1) ? str.tostring(dTP1, format.mintick) : "—"
     t2s = not na(dTP2) ? str.tostring(dTP2, format.mintick) : "—"
-    table.cell(dash, 1, 7, t1s + " / " + t2s, text_color=color.green, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 9, t1s + " / " + t2s, text_color=color.green, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // R:R
     float rr = isBull ? longRR : shortRR
-    table.cell(dash, 0, 8, "R:R", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 8, not na(rr) and rr > 0 ? str.tostring(rr, "#.##") + " : 1" : "—", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 10, "R:R", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 10, not na(rr) and rr > 0 ? str.tostring(rr, "#.##") + " : 1" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
+    // AVWAP
+    table.cell(dash, 0, 11, "AVWAP 52WH", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 11, not na(avwap52) ? str.tostring(avwap52, format.mintick) : "—", text_color=color.purple, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     // ATR %
-    table.cell(dash, 0, 9, "ATR %", text_color=color.new(color.white, 30), text_size=size.small, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 9, not na(atrPct) ? str.tostring(atrPct, "#.##") + "%" : "—", text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 12, "ATR %", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 12, not na(atrPct) ? str.tostring(atrPct, "#.##") + "%" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ALERTS
-// ═══════════════════════════════════════════════════════════════════════════════
+    // Pivot
+    table.cell(dash, 0, 13, "Pivot", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 13, str.tostring(actualPivotLen) + (autoPivot ? " (auto)" : ""), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
+    // Signal Status
+    string sigStat = validLong ? "BUY SIGNAL" : validShort ? "SELL SIGNAL" : longActive ? "Long Active" : shortActive ? "Short Active" : "Waiting"
+    color sigCol = validLong ? color.green : validShort ? color.red : longActive ? color.new(color.green, 50) : shortActive ? color.new(color.red, 50) : color.gray
+    table.cell(dash, 0, 14, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 14, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
+// =============================================================================
+// ALERTS — Live + Confirmed
+// =============================================================================
+
+// Live alert (fires once during bar formation when conditions first met)
 if validLong
-    alertMsg = '{"action":"BUY","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(longSL) + ',"tp1":' + str.tostring(longTP1) + ',"tp2":' + str.tostring(longTP2) + ',"qty":' + str.tostring(longQty) + ',"rr":"' + str.tostring(longRR, "#.#") + '","timeframe":"' + timeframe.period + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
+    alertMsg = '{"action":"BUY","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(longSL) + ',"tp1":' + str.tostring(longTP1) + ',"tp2":' + str.tostring(longTP2) + ',"qty":' + str.tostring(longQty) + ',"rr":"' + str.tostring(longRR, "#.#") + '","timeframe":"' + timeframe.period + '","confirmed":' + (barstate.isconfirmed ? 'true' : 'false') + '}'
+    alert(alertMsg, alert.freq_once_per_bar)
 
 if validShort
-    alertMsg = '{"action":"SELL","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(shortSL) + ',"tp1":' + str.tostring(shortTP1) + ',"tp2":' + str.tostring(shortTP2) + ',"qty":' + str.tostring(shortQty) + ',"rr":"' + str.tostring(shortRR, "#.#") + '","timeframe":"' + timeframe.period + '"}'
-    alert(alertMsg, alert.freq_once_per_bar_close)
+    alertMsg = '{"action":"SELL","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(shortSL) + ',"tp1":' + str.tostring(shortTP1) + ',"tp2":' + str.tostring(shortTP2) + ',"qty":' + str.tostring(shortQty) + ',"rr":"' + str.tostring(shortRR, "#.#") + '","timeframe":"' + timeframe.period + '","confirmed":' + (barstate.isconfirmed ? 'true' : 'false') + '}'
+    alert(alertMsg, alert.freq_once_per_bar)
 
 alertcondition(validLong, "FibAlgo Long Entry", "FibAlgo: Long entry signal")
 alertcondition(validShort, "FibAlgo Short Entry", "FibAlgo: Short entry signal")
