@@ -11,7 +11,7 @@ accountSize    = input.float(100000, "Account Size ($)", minval=100, group="Risk
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
 atrMult        = input.float(0.5, "ATR SL Buffer", minval=0.1, maxval=2.0, step=0.1, group="Risk Management")
-minRR          = input.float(1.5, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
 partialExitPct = input.float(50.0, "TP1 Exit %", minval=10, maxval=90, step=5, group="Risk Management")
 
 trendEmaLen    = input.int(21, "Fast EMA", minval=5, group="Trend")
@@ -59,8 +59,8 @@ if not na(pivotLow)
 // TREND
 // ═══════════════════════════════════════════════════════════════════════════════
 
-bool isBull = close > emaFast and emaFast > emaSlow
-bool isBear = close < emaFast and emaFast < emaSlow
+bool isBull = close > emaSlow
+bool isBear = close < emaSlow
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FIBONACCI LEVELS
@@ -113,8 +113,8 @@ float shortRR = not na(shortTP1) and not na(shortSL) and (shortSL - close) > 0 ?
 var bool longActive  = false
 var bool shortActive = false
 
-bool longEntry  = hasSwings and isBull and low <= fib382 and close >= fib618 and close > open and not longActive
-bool shortEntry = hasSwings and isBear and high >= fib618 and close <= fib382 and close < open and not shortActive
+bool longEntry  = hasSwings and isBull and low <= fib236 and close >= fib786 and close > open and not longActive
+bool shortEntry = hasSwings and isBear and high >= fib786 and close <= fib236 and close < open and not shortActive
 
 // Filter by R:R
 bool validLong  = longEntry and not na(longRR) and longRR >= minRR

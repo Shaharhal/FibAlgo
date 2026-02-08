@@ -12,7 +12,7 @@ accountSize    = input.float(100000, "Account Size ($)", minval=100, group="Risk
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
 atrMult        = input.float(0.5, "ATR SL Buffer", minval=0.1, maxval=2.0, step=0.1, group="Risk Management")
-minRR          = input.float(1.5, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
 
 partialExitPct = input.int(50, "TP1 Exit %", minval=10, maxval=90, step=5, group="Exit Strategy")
 
@@ -60,8 +60,9 @@ if not na(pivotLow)
 // TREND DIRECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-bool isBull = close > emaFast and emaFast > emaSlow
-bool isBear = close < emaFast and emaFast < emaSlow
+// Relaxed trend: just price vs slow EMA (more signals)
+bool isBull = close > emaSlow
+bool isBear = close < emaSlow
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // FIBONACCI LEVELS — always calculated when both swing points exist
@@ -94,11 +95,11 @@ float atrPct = not na(atrVal) and close > 0 ? (atrVal / close) * 100 : na
 // ENTRY LOGIC
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Long: price pulls back to 38.2%-61.8% zone + bullish candle + bullish trend
-bool longGZ = hasSwings and isBull and low <= fib382 and close >= fib618 and close > open and strategy.position_size == 0
+// Long: price touches any part of 23.6%-78.6% fib zone + bullish candle + uptrend
+bool longGZ = hasSwings and isBull and low <= fib236 and close >= fib786 and close > open and strategy.position_size == 0
 
-// Short: price rallies to 38.2%-61.8% zone + bearish candle + bearish trend
-bool shortGZ = hasSwings and isBear and high >= fib618 and close <= fib382 and close < open and strategy.position_size == 0
+// Short: price touches any part of 23.6%-78.6% fib zone + bearish candle + downtrend
+bool shortGZ = hasSwings and isBear and high >= fib786 and close <= fib236 and close < open and strategy.position_size == 0
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSITION SIZING & SL/TP
