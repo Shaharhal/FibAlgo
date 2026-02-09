@@ -20,7 +20,7 @@ sma150Len      = input.int(150, "SMA 150 (Direction)", minval=50, group="Trend")
 
 showFibs       = input.bool(true, "Show Fib Lines", group="Display")
 showHTF        = input.bool(true, "Show Higher TF Fibs", group="Display")
-showDashboard  = input.bool(false, "Show Dashboard", group="Display")
+showDashboard  = input.bool(true, "Show Dashboard", group="Display")
 showSignals    = input.bool(false, "Show BUY/SELL Labels", group="Display")
 showSwings     = input.bool(false, "Show Swing Markers", group="Display")
 showMAs        = input.bool(false, "Show MA Lines", group="Display")
