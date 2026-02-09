@@ -340,25 +340,36 @@ var int ema21Touches   = 0
 var bool wasAboveEMA   = false
 var bool wasBelowEMA   = false
 var float initialSL    = na
+var float entryPrice   = na
+var bool  movedToBE    = false
 
 if goLong
     strategy.entry("Long", strategy.long, qty=longQty)
+    entryPrice   := close
     initialSL    := longSL
+    movedToBE    := false
     ema21Touches := 0
     wasAboveEMA  := false
-    // Set initial stop loss
     strategy.exit("LSL", "Long", stop=longSL)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
+    entryPrice   := close
     initialSL    := shortSL
+    movedToBE    := false
     ema21Touches := 0
     wasBelowEMA  := false
-    // Set initial stop loss
     strategy.exit("SSL", "Short", stop=shortSL)
 
 // --- EMA 21 Trailing Exit: Longs ---
 if strategy.position_size > 0
+    // Break-even: once profit >= 1R, move SL to entry
+    if not movedToBE and not na(entryPrice) and not na(initialSL)
+        float riskDist = entryPrice - initialSL
+        if riskDist > 0 and close >= entryPrice + riskDist
+            movedToBE := true
+            strategy.exit("LSL", "Long", stop=entryPrice)
+
     // Track when price moves clearly above EMA 21
     if close > ema21 * 1.003
         wasAboveEMA := true
@@ -381,6 +392,13 @@ if strategy.position_size > 0
 
 // --- EMA 21 Trailing Exit: Shorts ---
 if strategy.position_size < 0
+    // Break-even: once profit >= 1R, move SL to entry
+    if not movedToBE and not na(entryPrice) and not na(initialSL)
+        float riskDist = initialSL - entryPrice
+        if riskDist > 0 and close <= entryPrice - riskDist
+            movedToBE := true
+            strategy.exit("SSL", "Short", stop=entryPrice)
+
     // Track when price moves clearly below EMA 21
     if close < ema21 * 0.997
         wasBelowEMA := true
