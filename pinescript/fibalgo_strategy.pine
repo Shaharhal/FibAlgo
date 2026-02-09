@@ -11,10 +11,11 @@ pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group=
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
 atrMult        = input.float(2.0, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
-minRR          = input.float(2.5, "Min R:R", minval=1.0, maxval=5.0, step=0.1, group="Risk Management")
+minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
 fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
-partialExitPct = input.int(50, "TP1 Exit %", minval=10, maxval=90, step=5, group="Exit Strategy")
+emaPartialPct  = input.int(25, "EMA21 Touch Partial %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of remaining position to close each time price touches EMA 21")
+useEMABounce   = input.bool(true, "EMA 21 Bounce Re-entry", group="Entry Strategy", tooltip="Allow re-entry when price bounces off EMA 21 in trend direction")
 
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
 sma50Len       = input.int(50, "SMA 50", minval=10, group="Trend")
@@ -130,8 +131,9 @@ if not na(pivotLow)
 // =============================================================================
 
 htf = timeframe.isintraday ? "D" : "W"
-htfHigh = request.security(syminfo.tickerid, htf, ta.highest(high, 20), barmerge.gaps_off, barmerge.lookahead_off)
-htfLow  = request.security(syminfo.tickerid, htf, ta.lowest(low, 20), barmerge.gaps_off, barmerge.lookahead_off)
+htfHigh    = request.security(syminfo.tickerid, htf, ta.highest(high, 20), barmerge.gaps_off, barmerge.lookahead_off)
+htfLow     = request.security(syminfo.tickerid, htf, ta.lowest(low, 20), barmerge.gaps_off, barmerge.lookahead_off)
+htfSMA150  = request.security(syminfo.tickerid, htf, ta.sma(close, 150), barmerge.gaps_off, barmerge.lookahead_off)
 
 bool htfValid = not na(htfHigh) and not na(htfLow) and htfHigh > htfLow
 float htfRange = htfValid ? htfHigh - htfLow : na
@@ -150,6 +152,10 @@ bool belowSMA150 = not na(sma150) and close < sma150
 // Entry direction based on SMA 150 only
 bool isBull = aboveSMA150
 bool isBear = belowSMA150
+
+// HTF trend alignment
+bool htfBull = not na(htfSMA150) and close > htfSMA150
+bool htfBear = not na(htfSMA150) and close < htfSMA150
 
 // =============================================================================
 // FIBONACCI LEVELS (current timeframe)
@@ -234,11 +240,11 @@ float shortSLswing = hasSwings ? swHigh + nz(atrVal) * 0.5 : na
 float longSL  = not na(longSLswing) and longSLswing > longSLatr and longSLswing < close ? longSLswing : longSLatr < close ? longSLatr : na
 float shortSL = not na(shortSLswing) and shortSLswing < shortSLatr and shortSLswing > close ? shortSLswing : shortSLatr > close ? shortSLatr : na
 
-// TP from fib extensions + HTF levels
-float longTP1  = not na(ext127) and ext127 > close ? ext127 : not na(htf382) and htf382 > close ? htf382 : na
-float longTP2  = not na(ext162) and ext162 > close ? ext162 : not na(htfHigh) and htfHigh > close ? htfHigh : na
-float shortTP1 = hasSwings and (swLow - swRange * 0.272) < close ? swLow - swRange * 0.272 : not na(htf618) and htf618 < close ? htf618 : na
-float shortTP2 = hasSwings and (swLow - swRange * 0.618) < close ? swLow - swRange * 0.618 : not na(htfLow) and htfLow < close ? htfLow : na
+// TP estimates for R:R display (actual exit uses EMA 21 trailing)
+float longTP1  = hasSwings and swHigh > close ? swHigh : not na(htf382) and htf382 > close ? htf382 : na
+float longTP2  = not na(ext127) and ext127 > close ? ext127 : not na(ext162) and ext162 > close ? ext162 : not na(htfHigh) and htfHigh > close ? htfHigh : na
+float shortTP1 = hasSwings and swLow < close ? swLow : not na(htf618) and htf618 < close ? htf618 : na
+float shortTP2 = hasSwings and (swLow - swRange * 0.272) < close ? swLow - swRange * 0.272 : not na(htfLow) and htfLow < close ? htfLow : na
 
 // =============================================================================
 // ENTRY LOGIC — Near ANY key fib level + SMA 150 direction + candle pattern
@@ -255,13 +261,17 @@ bool nearHTF382 = not na(htf382) and math.abs(close - htf382) < fibDist
 bool nearHTF500 = not na(htf500) and math.abs(close - htf500) < fibDist
 bool nearHTF618 = not na(htf618) and math.abs(close - htf618) < goldenDist
 
-bool nearAnyFib = nearFib382 or nearFib500 or nearFib618 or nearHTF382 or nearHTF500 or nearHTF618
+bool nearAnyFib = nearFib500 or nearFib618 or nearHTF500 or nearHTF618
 
-// Long: above SMA 150 + near fib support + bullish candle + trending market
-bool longGZ = nearAnyFib and isBull and bullConfirm and not na(longSL) and isTrending and strategy.position_size == 0
+// Long: above SMA 150 + HTF aligned + near fib support + bullish candle + trending market
+bool longGZ = nearAnyFib and isBull and htfBull and bullConfirm and not na(longSL) and isTrending and strategy.position_size == 0
 
-// Short: below SMA 150 + near fib resistance + bearish candle + trending market
-bool shortGZ = nearAnyFib and isBear and bearConfirm and not na(shortSL) and isTrending and strategy.position_size == 0
+// Short: below SMA 150 + HTF aligned + near fib resistance + bearish candle + trending market
+bool shortGZ = nearAnyFib and isBear and htfBear and bearConfirm and not na(shortSL) and isTrending and strategy.position_size == 0
+
+// EMA 21 bounce re-entry (trend continuation)
+bool ema21BounceLong  = useEMABounce and strategy.position_size == 0 and isBull and htfBull and isTrending and low <= ema21 and close > ema21 and bullConfirm and not na(longSL)
+bool ema21BounceShort = useEMABounce and strategy.position_size == 0 and isBear and htfBear and isTrending and high >= ema21 and close < ema21 and bearConfirm and not na(shortSL)
 
 // =============================================================================
 // POSITION SIZING & R:R
@@ -270,16 +280,20 @@ bool shortGZ = nearAnyFib and isBear and bearConfirm and not na(shortSL) and isT
 float longQty = na, float longRR = na
 float shortQty = na, float shortRR = na
 
-if longGZ and not na(longTP1) and not na(longSL)
+if (longGZ or ema21BounceLong) and not na(longSL)
     float sd = close - longSL
     if sd > 0
-        longRR  := (longTP1 - close) / sd
+        float r1 = not na(longTP1) ? (longTP1 - close) : 0
+        float r2 = not na(longTP2) ? (longTP2 - close) : r1
+        longRR  := (0.5 * r1 + 0.5 * r2) / sd
         longQty := math.max(1, math.floor(maxLossDollars / sd))
 
-if shortGZ and not na(shortTP1) and not na(shortSL)
+if (shortGZ or ema21BounceShort) and not na(shortSL)
     float sd = shortSL - close
     if sd > 0
-        shortRR  := (close - shortTP1) / sd
+        float r1 = not na(shortTP1) ? (close - shortTP1) : 0
+        float r2 = not na(shortTP2) ? (close - shortTP2) : r1
+        shortRR  := (0.5 * r1 + 0.5 * r2) / sd
         shortQty := math.max(1, math.floor(maxLossDollars / sd))
 
 // =============================================================================
@@ -317,18 +331,73 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 // STRATEGY EXECUTION
 // =============================================================================
 
-bool goLong  = longGZ and not na(longRR) and longRR >= minRR
-bool goShort = shortGZ and not na(shortRR) and shortRR >= minRR
+bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR
+bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR
+
+// Track EMA 21 touch state for partial exits
+var int ema21Touches   = 0
+var bool wasAboveEMA   = false
+var bool wasBelowEMA   = false
+var float initialSL    = na
 
 if goLong
     strategy.entry("Long", strategy.long, qty=longQty)
-    strategy.exit("LTP1", "Long", qty_percent=partialExitPct, limit=longTP1, stop=longSL)
-    strategy.exit("LTP2", "Long", qty_percent=100, limit=longTP2, stop=longSL)
+    initialSL    := longSL
+    ema21Touches := 0
+    wasAboveEMA  := false
+    // Set initial stop loss
+    strategy.exit("LSL", "Long", stop=longSL)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
-    strategy.exit("STP1", "Short", qty_percent=partialExitPct, limit=shortTP1, stop=shortSL)
-    strategy.exit("STP2", "Short", qty_percent=100, limit=shortTP2, stop=shortSL)
+    initialSL    := shortSL
+    ema21Touches := 0
+    wasBelowEMA  := false
+    // Set initial stop loss
+    strategy.exit("SSL", "Short", stop=shortSL)
+
+// --- EMA 21 Trailing Exit: Longs ---
+if strategy.position_size > 0
+    // Track when price moves clearly above EMA 21
+    if close > ema21 * 1.003
+        wasAboveEMA := true
+
+    // Price pulled back and touched EMA 21 from above (wick or body)
+    bool ema21Touch = wasAboveEMA and low <= ema21 and close >= ema21
+    if ema21Touch
+        ema21Touches += 1
+        wasAboveEMA  := false
+        // Take partial: close % of remaining position
+        float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
+        if partialQty < math.abs(strategy.position_size)
+            strategy.order("LPartial", strategy.short, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+
+    // Candle CLOSED below EMA 21 → full exit
+    if close < ema21
+        strategy.close("Long", comment="Closed under EMA21")
+        ema21Touches := 0
+        wasAboveEMA  := false
+
+// --- EMA 21 Trailing Exit: Shorts ---
+if strategy.position_size < 0
+    // Track when price moves clearly below EMA 21
+    if close < ema21 * 0.997
+        wasBelowEMA := true
+
+    // Price pulled back up and touched EMA 21 from below
+    bool ema21Touch = wasBelowEMA and high >= ema21 and close <= ema21
+    if ema21Touch
+        ema21Touches += 1
+        wasBelowEMA  := false
+        float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
+        if partialQty < math.abs(strategy.position_size)
+            strategy.order("SPartial", strategy.long, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+
+    // Candle CLOSED above EMA 21 → full exit
+    if close > ema21
+        strategy.close("Short", comment="Closed above EMA21")
+        ema21Touches := 0
+        wasBelowEMA  := false
 
 // =============================================================================
 // VISUALS — FIB LINES (current TF: RED/BLUE, HTF: dotted yellow)
@@ -503,7 +572,7 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 16, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 16, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    string sigStat = goLong ? "BUY SIGNAL" : goShort ? "SELL SIGNAL" : "Waiting"
+    string sigStat = goLong ? (ema21BounceLong ? "BUY (EMA)" : "BUY SIGNAL") : goShort ? (ema21BounceShort ? "SELL (EMA)" : "SELL SIGNAL") : "Waiting"
     color sigCol = goLong ? color.green : goShort ? color.red : color.gray
     table.cell(dash, 0, 17, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 17, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
