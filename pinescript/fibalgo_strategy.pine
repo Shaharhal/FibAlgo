@@ -345,30 +345,33 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
 bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
-// Track EMA 21 touch state for partial exits
-var int ema21Touches   = 0
-var bool wasAboveEMA   = false
-var bool wasBelowEMA   = false
-var float initialSL    = na
-var float entryPrice   = na
-var bool  movedToBE    = false
+// Track EMA 21 trailing state
+var int ema21Touches    = 0
+var bool wasAboveEMA    = false
+var bool wasBelowEMA    = false
+var bool emaTrailActive = false  // only true once price crosses EMA 21 after entry
+var float initialSL     = na
+var float entryPrice    = na
+var bool  movedToBE     = false
 
 if goLong
     strategy.entry("Long", strategy.long, qty=longQty)
-    entryPrice   := close
-    initialSL    := longSL
-    movedToBE    := false
-    ema21Touches := 0
-    wasAboveEMA  := false
+    entryPrice      := close
+    initialSL       := longSL
+    movedToBE       := false
+    emaTrailActive  := false
+    ema21Touches    := 0
+    wasAboveEMA     := false
     strategy.exit("LSL", "Long", stop=longSL)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
-    entryPrice   := close
-    initialSL    := shortSL
-    movedToBE    := false
-    ema21Touches := 0
-    wasBelowEMA  := false
+    entryPrice      := close
+    initialSL       := shortSL
+    movedToBE       := false
+    emaTrailActive  := false
+    ema21Touches    := 0
+    wasBelowEMA     := false
     strategy.exit("SSL", "Short", stop=shortSL)
 
 // --- EMA 21 Trailing Exit: Longs ---
@@ -380,25 +383,28 @@ if strategy.position_size > 0
             movedToBE := true
             strategy.exit("LSL", "Long", stop=entryPrice)
 
-    // Track when price moves clearly above EMA 21
+    // Track when price crosses above EMA 21 — activates trailing
     if close > ema21 * 1.003
-        wasAboveEMA := true
+        wasAboveEMA    := true
+        emaTrailActive := true  // once above, trailing is armed forever for this trade
 
-    // Price pulled back and touched EMA 21 from above (wick or body)
-    bool ema21Touch = wasAboveEMA and low <= ema21 and close >= ema21
-    if ema21Touch
-        ema21Touches += 1
-        wasAboveEMA  := false
-        // Take partial: close % of remaining position
-        float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
-        if partialQty < math.abs(strategy.position_size)
-            strategy.order("LPartial", strategy.short, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+    // Only apply EMA 21 exit logic once price has been above it
+    if emaTrailActive
+        // Price pulled back and touched EMA 21 from above (wick or body)
+        bool ema21Touch = wasAboveEMA and low <= ema21 and close >= ema21
+        if ema21Touch
+            ema21Touches += 1
+            wasAboveEMA  := false
+            float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
+            if partialQty < math.abs(strategy.position_size)
+                strategy.order("LPartial", strategy.short, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
 
-    // Candle CLOSED below EMA 21 → full exit
-    if close < ema21
-        strategy.close("Long", comment="Closed under EMA21")
-        ema21Touches := 0
-        wasAboveEMA  := false
+        // Candle CLOSED below EMA 21 → full exit (only if we were above it before)
+        if close < ema21
+            strategy.close("Long", comment="Closed under EMA21")
+            ema21Touches   := 0
+            wasAboveEMA    := false
+            emaTrailActive := false
 
 // --- EMA 21 Trailing Exit: Shorts ---
 if strategy.position_size < 0
@@ -409,24 +415,28 @@ if strategy.position_size < 0
             movedToBE := true
             strategy.exit("SSL", "Short", stop=entryPrice)
 
-    // Track when price moves clearly below EMA 21
+    // Track when price crosses below EMA 21 — activates trailing
     if close < ema21 * 0.997
-        wasBelowEMA := true
+        wasBelowEMA    := true
+        emaTrailActive := true
 
-    // Price pulled back up and touched EMA 21 from below
-    bool ema21Touch = wasBelowEMA and high >= ema21 and close <= ema21
-    if ema21Touch
-        ema21Touches += 1
-        wasBelowEMA  := false
-        float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
-        if partialQty < math.abs(strategy.position_size)
-            strategy.order("SPartial", strategy.long, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+    // Only apply EMA 21 exit logic once price has been below it
+    if emaTrailActive
+        // Price pulled back up and touched EMA 21 from below
+        bool ema21Touch = wasBelowEMA and high >= ema21 and close <= ema21
+        if ema21Touch
+            ema21Touches += 1
+            wasBelowEMA  := false
+            float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
+            if partialQty < math.abs(strategy.position_size)
+                strategy.order("SPartial", strategy.long, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
 
-    // Candle CLOSED above EMA 21 → full exit
-    if close > ema21
-        strategy.close("Short", comment="Closed above EMA21")
-        ema21Touches := 0
-        wasBelowEMA  := false
+        // Candle CLOSED above EMA 21 → full exit (only if we were below it before)
+        if close > ema21
+            strategy.close("Short", comment="Closed above EMA21")
+            ema21Touches   := 0
+            wasBelowEMA    := false
+            emaTrailActive := false
 
 // =============================================================================
 // VISUALS — FIB LINES (white, clean)
