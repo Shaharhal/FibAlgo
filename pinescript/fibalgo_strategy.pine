@@ -15,7 +15,10 @@ minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, g
 minConv        = input.float(60, "Min Conviction %", minval=30, maxval=90, step=5, group="Risk Management", tooltip="Only enter when conviction score is above this threshold")
 fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
-emaPartialPct  = input.int(25, "EMA21 Touch Partial %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of remaining position to close each time price touches EMA 21")
+exitR1         = input.float(1.0, "1st Exit (R)", minval=0.5, maxval=5.0, step=0.5, group="Exit Strategy", tooltip="Take 1st partial at this R-multiple and move SL to break-even")
+exitR2         = input.float(2.0, "2nd Exit (R)", minval=1.0, maxval=10.0, step=0.5, group="Exit Strategy", tooltip="Take 2nd partial at this R-multiple and trail SL to +1R")
+exitPct1       = input.int(33, "1st Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of position to close at 1st R target")
+exitPct2       = input.int(33, "2nd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of position to close at 2nd R target. Remainder trails with SMA 50")
 useEMABounce   = input.bool(true, "EMA 21 Bounce Re-entry", group="Entry Strategy", tooltip="Allow re-entry when price bounces off EMA 21 in trend direction")
 
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
@@ -345,98 +348,78 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
 bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
-// Track EMA 21 trailing state
-var int ema21Touches    = 0
-var bool wasAboveEMA    = false
-var bool wasBelowEMA    = false
-var bool emaTrailActive = false  // only true once price crosses EMA 21 after entry
-var float initialSL     = na
-var float entryPrice    = na
-var bool  movedToBE     = false
+// Track R-multiple exit state
+var float entryPrice = na
+var float initialSL  = na
+var float riskDist   = na
+var bool  hitR1      = false
+var bool  hitR2      = false
 
 if goLong
     strategy.entry("Long", strategy.long, qty=longQty)
-    entryPrice      := close
-    initialSL       := longSL
-    movedToBE       := false
-    emaTrailActive  := false
-    ema21Touches    := 0
-    wasAboveEMA     := false
+    entryPrice := close
+    initialSL  := longSL
+    riskDist   := close - longSL
+    hitR1      := false
+    hitR2      := false
     strategy.exit("LSL", "Long", stop=longSL)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
-    entryPrice      := close
-    initialSL       := shortSL
-    movedToBE       := false
-    emaTrailActive  := false
-    ema21Touches    := 0
-    wasBelowEMA     := false
+    entryPrice := close
+    initialSL  := shortSL
+    riskDist   := shortSL - close
+    hitR1      := false
+    hitR2      := false
     strategy.exit("SSL", "Short", stop=shortSL)
 
-// --- EMA 21 Trailing Exit: Longs ---
-if strategy.position_size > 0
-    // Break-even: once profit >= 1R, move SL to entry
-    if not movedToBE and not na(entryPrice) and not na(initialSL)
-        float riskDist = entryPrice - initialSL
-        if riskDist > 0 and close >= entryPrice + riskDist
-            movedToBE := true
-            strategy.exit("LSL", "Long", stop=entryPrice)
+// --- R-Multiple Scaling: Longs ---
+if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
+    float curProfit = close - entryPrice
 
-    // Track when price crosses above EMA 21 — activates trailing
-    if close > ema21 * 1.003
-        wasAboveEMA    := true
-        emaTrailActive := true  // once above, trailing is armed forever for this trade
+    // +1R: take 1/3, move SL to break-even
+    if not hitR1 and curProfit >= riskDist * exitR1
+        hitR1 := true
+        float qty1 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct1 / 100.0))
+        if qty1 < math.abs(strategy.position_size)
+            strategy.order("L+1R", strategy.short, qty=qty1, comment=str.tostring(exitR1, "#.#") + "R partial")
+        strategy.exit("LSL", "Long", stop=entryPrice)
 
-    // Only apply EMA 21 exit logic once price has been above it
-    if emaTrailActive
-        // Price pulled back and touched EMA 21 from above (wick or body)
-        bool ema21Touch = wasAboveEMA and low <= ema21 and close >= ema21
-        if ema21Touch
-            ema21Touches += 1
-            wasAboveEMA  := false
-            float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
-            if partialQty < math.abs(strategy.position_size)
-                strategy.order("LPartial", strategy.short, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+    // +2R: take 1/3, trail SL to +1R
+    if not hitR2 and curProfit >= riskDist * exitR2
+        hitR2 := true
+        float qty2 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct2 / 100.0))
+        if qty2 < math.abs(strategy.position_size)
+            strategy.order("L+2R", strategy.short, qty=qty2, comment=str.tostring(exitR2, "#.#") + "R partial")
+        strategy.exit("LSL", "Long", stop=entryPrice + riskDist)
 
-        // Candle CLOSED below EMA 21 → full exit (only if we were above it before)
-        if close < ema21
-            strategy.close("Long", comment="Closed under EMA21")
-            ema21Touches   := 0
-            wasAboveEMA    := false
-            emaTrailActive := false
+    // Runner: trail with SMA 50 — close below SMA 50 = full exit
+    if hitR2 and close < sma50
+        strategy.close("Long", comment="Runner closed under SMA50")
 
-// --- EMA 21 Trailing Exit: Shorts ---
-if strategy.position_size < 0
-    // Break-even: once profit >= 1R, move SL to entry
-    if not movedToBE and not na(entryPrice) and not na(initialSL)
-        float riskDist = initialSL - entryPrice
-        if riskDist > 0 and close <= entryPrice - riskDist
-            movedToBE := true
-            strategy.exit("SSL", "Short", stop=entryPrice)
+// --- R-Multiple Scaling: Shorts ---
+if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
+    float curProfit = entryPrice - close
 
-    // Track when price crosses below EMA 21 — activates trailing
-    if close < ema21 * 0.997
-        wasBelowEMA    := true
-        emaTrailActive := true
+    // +1R: take 1/3, move SL to break-even
+    if not hitR1 and curProfit >= riskDist * exitR1
+        hitR1 := true
+        float qty1 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct1 / 100.0))
+        if qty1 < math.abs(strategy.position_size)
+            strategy.order("S+1R", strategy.long, qty=qty1, comment=str.tostring(exitR1, "#.#") + "R partial")
+        strategy.exit("SSL", "Short", stop=entryPrice)
 
-    // Only apply EMA 21 exit logic once price has been below it
-    if emaTrailActive
-        // Price pulled back up and touched EMA 21 from below
-        bool ema21Touch = wasBelowEMA and high >= ema21 and close <= ema21
-        if ema21Touch
-            ema21Touches += 1
-            wasBelowEMA  := false
-            float partialQty = math.max(1, math.floor(math.abs(strategy.position_size) * emaPartialPct / 100.0))
-            if partialQty < math.abs(strategy.position_size)
-                strategy.order("SPartial", strategy.long, qty=partialQty, comment="EMA21 Touch #" + str.tostring(ema21Touches))
+    // +2R: take 1/3, trail SL to -1R
+    if not hitR2 and curProfit >= riskDist * exitR2
+        hitR2 := true
+        float qty2 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct2 / 100.0))
+        if qty2 < math.abs(strategy.position_size)
+            strategy.order("S+2R", strategy.long, qty=qty2, comment=str.tostring(exitR2, "#.#") + "R partial")
+        strategy.exit("SSL", "Short", stop=entryPrice - riskDist)
 
-        // Candle CLOSED above EMA 21 → full exit (only if we were below it before)
-        if close > ema21
-            strategy.close("Short", comment="Closed above EMA21")
-            ema21Touches   := 0
-            wasBelowEMA    := false
-            emaTrailActive := false
+    // Runner: trail with SMA 50 — close above SMA 50 = full exit
+    if hitR2 and close > sma50
+        strategy.close("Short", comment="Runner closed above SMA50")
 
 // =============================================================================
 // VISUALS — FIB LINES (white, clean)
