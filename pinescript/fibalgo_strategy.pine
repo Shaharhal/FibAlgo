@@ -527,7 +527,7 @@ dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSi
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 19, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+    var table dash = table.new(position.top_right, 2, 19, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
     table.cell(dash, 0, 0, "  FibAlgo  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
     table.cell(dash, 1, 0, "  STRATEGY  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
