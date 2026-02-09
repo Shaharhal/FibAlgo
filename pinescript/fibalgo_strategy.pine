@@ -21,6 +21,7 @@ useEMABounce   = input.bool(true, "EMA 21 Bounce Re-entry", group="Entry Strateg
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
 sma50Len       = input.int(50, "SMA 50", minval=10, group="Trend")
 sma150Len      = input.int(150, "SMA 150 (Direction)", minval=50, group="Trend")
+sectorETF      = input.symbol("XLK", "Sector ETF", group="Trend", tooltip="Sector ETF for extra conviction (e.g., XLF for banks, XLK for tech, XLE for energy)")
 
 showFibs       = input.bool(true, "Show Fib Lines", group="Display")
 showHTF        = input.bool(false, "Show Higher TF Fibs", group="Display")
@@ -55,6 +56,12 @@ float dx       = diSum > 0 ? 100 * math.abs(plusDI - minusDI) / diSum : 0
 float adxVal   = ta.rma(dx, adxLen)
 
 bool isTrending = adxVal > adxThresh
+
+// Sector ETF trend
+sectorClose  = request.security(sectorETF, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+sectorSMA150 = request.security(sectorETF, timeframe.period, ta.sma(close, 150), barmerge.gaps_off, barmerge.lookahead_off)
+bool sectorBull = not na(sectorClose) and not na(sectorSMA150) and sectorClose > sectorSMA150
+bool sectorBear = not na(sectorClose) and not na(sectorSMA150) and sectorClose < sectorSMA150
 
 plot(showMAs ? ema21 : na, "EMA 21", color.new(#00BCD4, 0), 2)
 plot(showMAs ? sma50 : na, "SMA 50", color.new(#FF5722, 0), 2)
@@ -324,6 +331,8 @@ bullPts += isTrending ? 10 : 0
 bearPts += isTrending ? 10 : 0
 bullPts += bullDivergence ? 10 : 0
 bearPts += bearDivergence ? 10 : 0
+bullPts += sectorBull ? 10 : 0
+bearPts += sectorBear ? 10 : 0
 
 float convPct = math.max(bullPts, bearPts)
 string convDir = bullPts > bearPts ? "Bullish" : bullPts < bearPts ? "Bearish" : "Neutral"
@@ -518,7 +527,7 @@ dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSi
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 18, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+    var table dash = table.new(position.bottom_left, 2, 19, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
     table.cell(dash, 0, 0, "  FibAlgo  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
     table.cell(dash, 1, 0, "  STRATEGY  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
@@ -587,7 +596,12 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 16, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     table.cell(dash, 1, 16, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
+    string sectorTxt = sectorBull ? "Bullish" : sectorBear ? "Bearish" : "Neutral"
+    color sectorCol = sectorBull ? color.green : sectorBear ? color.red : color.gray
+    table.cell(dash, 0, 17, "Sector", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 17, sectorTxt, text_color=sectorCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+
     string sigStat = goLong ? (ema21BounceLong ? "BUY (EMA)" : "BUY SIGNAL") : goShort ? (ema21BounceShort ? "SELL (EMA)" : "SELL SIGNAL") : "Waiting"
     color sigCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(dash, 0, 17, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
-    table.cell(dash, 1, 17, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 0, 18, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 18, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
