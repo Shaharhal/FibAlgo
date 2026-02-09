@@ -10,8 +10,9 @@ pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group=
 
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
-atrMult        = input.float(2.0, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
+atrMult        = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
 minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
+minConv        = input.float(60, "Min Conviction %", minval=30, maxval=90, step=5, group="Risk Management", tooltip="Only enter when conviction score is above this threshold")
 fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
 emaPartialPct  = input.int(25, "EMA21 Touch Partial %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of remaining position to close each time price touches EMA 21")
@@ -332,8 +333,8 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 // STRATEGY EXECUTION
 // =============================================================================
 
-bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR
-bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR
+bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
+bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
 // Track EMA 21 touch state for partial exits
 var int ema21Touches   = 0
