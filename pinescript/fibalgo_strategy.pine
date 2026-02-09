@@ -5,29 +5,26 @@ strategy("FibAlgo Strategy", overlay=true, default_qty_type=strategy.fixed, defa
 // INPUTS
 // =============================================================================
 
-// Swing Detection
 autoPivot      = input.bool(true, "Auto Pivot (by timeframe)", group="Swing Detection")
 pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group="Swing Detection", tooltip="Only used when Auto Pivot is off")
 
-// Risk Management
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
-atrMult        = input.float(0.5, "ATR SL Buffer", minval=0.1, maxval=2.0, step=0.1, group="Risk Management")
+atrMult        = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
 minRR          = input.float(2.5, "Min R:R", minval=1.0, maxval=5.0, step=0.1, group="Risk Management")
+fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
-// Exit Strategy
 partialExitPct = input.int(50, "TP1 Exit %", minval=10, maxval=90, step=5, group="Exit Strategy")
 
-// Trend — EMA 21, SMA 50, SMA 150 are the backbone
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
 sma50Len       = input.int(50, "SMA 50", minval=10, group="Trend")
 sma150Len      = input.int(150, "SMA 150 (Direction)", minval=50, group="Trend")
 
-// Display
 showFibs       = input.bool(true, "Show Fib Lines", group="Display")
-showDashboard  = input.bool(true, "Show Dashboard", group="Display")
-showSignals    = input.bool(true, "Show BUY/SELL Labels", group="Display")
-showMAs        = input.bool(true, "Show MA Lines", group="Display")
+showHTF        = input.bool(true, "Show Higher TF Fibs", group="Display")
+showDashboard  = input.bool(false, "Show Dashboard", group="Display")
+showSignals    = input.bool(false, "Show BUY/SELL Labels", group="Display")
+showMAs        = input.bool(false, "Show MA Lines", group="Display")
 dashSize       = input.string("normal", "Dashboard Text Size", options=["tiny", "small", "normal", "large"], group="Display")
 
 // =============================================================================
@@ -40,21 +37,18 @@ sma50    = ta.sma(close, sma50Len)
 sma150   = ta.sma(close, sma150Len)
 rsiVal   = ta.rsi(close, 14)
 
-// Plot MAs
 plot(showMAs ? ema21 : na, "EMA 21", color.new(#00BCD4, 0), 2)
 plot(showMAs ? sma50 : na, "SMA 50", color.new(#FF5722, 0), 2)
 plot(showMAs ? sma150 : na, "SMA 150", color.new(#FFEB3B, 40), 1)
 
-// Auto pivot by timeframe
-// Lower TF = more bars per swing = higher pivot to filter noise
-// Higher TF = fewer bars needed = lower pivot for meaningful swings
+// Auto pivot: lower TF = higher pivot to filter noise
 autoLen = timeframe.isintraday ?
      (timeframe.multiplier <= 5 ? 10 :
       timeframe.multiplier <= 15 ? 8 :
       timeframe.multiplier <= 60 ? 6 :
-      timeframe.multiplier <= 240 ? 5 : 5) :
-     (timeframe.period == "D" ? 5 :
-      timeframe.period == "W" ? 3 : 3)
+      timeframe.multiplier <= 240 ? 5 : 4) :
+     (timeframe.period == "D" ? 3 :
+      timeframe.period == "W" ? 2 : 2)
 
 actualPivotLen = autoPivot ? autoLen : pivotLen
 
@@ -79,18 +73,13 @@ else
     cumVolPrice += hlc3 * volume
 
 float avwap52 = cumVol > 0 ? cumVolPrice / cumVol : na
+plot(avwap52, "AVWAP 52WH", color.new(color.purple, 30), 1, plot.style_line)
 
-plot(avwap52, "AVWAP 52WH", color.new(color.purple, 20), 2, plot.style_line)
-
-// AVWAP x SMA 50 golden cross
 bool avwapGoldenX = not na(avwap52) and ta.crossover(avwap52, sma50)
-bool avwapDeathX  = not na(avwap52) and ta.crossunder(avwap52, sma50)
-
 plotchar(avwapGoldenX, "AVWAP Golden Cross", "★", location.belowbar, color.new(color.yellow, 0), size=size.small)
-plotchar(avwapDeathX, "AVWAP Death Cross", "★", location.abovebar, color.new(color.red, 0), size=size.small)
 
 // =============================================================================
-// RELATIVE STRENGTH (percentile rank over ~1 year)
+// RELATIVE STRENGTH
 // =============================================================================
 
 rsRank = ta.percentrank(close, 252)
@@ -121,33 +110,41 @@ if not na(pivotLow)
     newSwing := true
 
 // =============================================================================
-// TREND DIRECTION — SMA 150 is king
+// HIGHER TIMEFRAME FIBS (context levels)
+// =============================================================================
+
+htf = timeframe.isintraday ? "D" : "W"
+htfHigh = request.security(syminfo.tickerid, htf, ta.highest(high, 20), barmerge.gaps_off, barmerge.lookahead_off)
+htfLow  = request.security(syminfo.tickerid, htf, ta.lowest(low, 20), barmerge.gaps_off, barmerge.lookahead_off)
+
+bool htfValid = not na(htfHigh) and not na(htfLow) and htfHigh > htfLow
+float htfRange = htfValid ? htfHigh - htfLow : na
+
+float htf382 = htfValid ? htfHigh - htfRange * 0.382 : na
+float htf500 = htfValid ? htfHigh - htfRange * 0.500 : na
+float htf618 = htfValid ? htfHigh - htfRange * 0.618 : na
+
+// =============================================================================
+// TREND DIRECTION — SMA 150 for direction, rest is conviction
 // =============================================================================
 
 bool aboveSMA150 = not na(sma150) and close > sma150
 bool belowSMA150 = not na(sma150) and close < sma150
-bool emaAboveSMA = ema21 > sma50
-bool emaBelowSMA = ema21 < sma50
 
-// Full bullish: above SMA 150 AND EMA 21 > SMA 50
-bool isBull = aboveSMA150 and emaAboveSMA
-// Full bearish: below SMA 150 AND EMA 21 < SMA 50
-bool isBear = belowSMA150 and emaBelowSMA
+// Entry direction based on SMA 150 only
+bool isBull = aboveSMA150
+bool isBear = belowSMA150
 
 // =============================================================================
-// FIBONACCI LEVELS
+// FIBONACCI LEVELS (current timeframe)
 // =============================================================================
 
 bool hasSwings = not na(swHigh) and not na(swLow) and swHigh > swLow
 float swRange  = hasSwings ? swHigh - swLow : na
 
-float fib236 = na
-float fib382 = na
-float fib500 = na
-float fib618 = na
-float fib786 = na
-float ext127 = na
-float ext162 = na
+float fib236 = na, float fib382 = na, float fib500 = na
+float fib618 = na, float fib786 = na
+float ext127 = na, float ext162 = na
 
 if hasSwings
     fib236 := swHigh - swRange * 0.236
@@ -161,50 +158,82 @@ if hasSwings
 float atrPct = not na(atrVal) and close > 0 ? (atrVal / close) * 100 : na
 
 // =============================================================================
-// SL / TP — VALIDATED (SL must be directionally correct)
+// CANDLESTICK PATTERNS
 // =============================================================================
 
-float longSLraw  = hasSwings ? swLow - nz(atrVal) * atrMult : na
-float shortSLraw = hasSwings ? swHigh + nz(atrVal) * atrMult : na
+float bodySize    = math.abs(close - open)
+float upperWick   = high - math.max(close, open)
+float lowerWick   = math.min(close, open) - low
+float candleRange = high - low
+float bodyPct     = candleRange > 0 ? bodySize / candleRange : 0
 
-// Long SL MUST be below price, Short SL MUST be above price
-float longSL  = not na(longSLraw) and longSLraw < close ? longSLraw : na
-float shortSL = not na(shortSLraw) and shortSLraw > close ? shortSLraw : na
+bool isDoji          = bodyPct < 0.1 and candleRange > 0
+bool isDragonflyDoji = isDoji and lowerWick > candleRange * 0.6 and upperWick < candleRange * 0.1
+bool isGravestoneDoji = isDoji and upperWick > candleRange * 0.6 and lowerWick < candleRange * 0.1
+bool isBullMarubozu  = close > open and bodyPct > 0.8
+bool isBearMarubozu  = close < open and bodyPct > 0.8
+bool isHammer        = close >= open and bodySize > 0 and lowerWick >= bodySize * 2 and upperWick <= bodySize * 0.5
+bool isShootingStar  = close <= open and bodySize > 0 and upperWick >= bodySize * 2 and lowerWick <= bodySize * 0.5
+bool isBullEngulfing = close > open and close[1] < open[1] and close > open[1] and open <= close[1]
+bool isBearEngulfing = close < open and close[1] > open[1] and close < open[1] and open >= close[1]
+bool isInsideBar     = high <= high[1] and low >= low[1]
 
-// TP levels (raw)
-float longTP1raw  = ext127
-float longTP2raw  = ext162
-float shortTP1raw = hasSwings ? swLow - swRange * 0.272 : na
-float shortTP2raw = hasSwings ? swLow - swRange * 0.618 : na
+bool bullConfirm = close > open or isHammer or isDragonflyDoji or isBullMarubozu or isBullEngulfing or (isInsideBar and close >= open)
+bool bearConfirm = close < open or isShootingStar or isGravestoneDoji or isBearMarubozu or isBearEngulfing or (isInsideBar and close <= open)
 
-// Validate TPs (long TPs > price, short TPs < price)
-float longTP1  = not na(longTP1raw) and longTP1raw > close ? longTP1raw : na
-float longTP2  = not na(longTP2raw) and longTP2raw > close ? longTP2raw : na
-float shortTP1 = not na(shortTP1raw) and shortTP1raw < close ? shortTP1raw : na
-float shortTP2 = not na(shortTP2raw) and shortTP2raw < close ? shortTP2raw : na
+string patternName = isBullMarubozu ? "Bull Marubozu" : isBearMarubozu ? "Bear Marubozu" : isBullEngulfing ? "Bull Engulfing" : isBearEngulfing ? "Bear Engulfing" : isHammer ? "Hammer" : isShootingStar ? "Shooting Star" : isDragonflyDoji ? "Dragonfly Doji" : isGravestoneDoji ? "Gravestone Doji" : isDoji ? "Doji" : isInsideBar ? "Inside Bar" : close > open ? "Bullish" : close < open ? "Bearish" : "Neutral"
 
 // =============================================================================
-// ENTRY LOGIC — Golden Zone (38.2%-61.8%) + SMA 150 + EMA/SMA alignment
+// SL / TP — ATR-CAPPED (no more SL 50% away)
 // =============================================================================
 
-// Golden zone touch: bar interacts with the 38.2%-61.8% retracement area
-// fib382 > fib618 in price (38.2% is closer to swing high)
-bool goldenTouch = hasSwings and low <= fib382 and high >= fib618
+// ATR-based SL (always reasonable distance)
+float atrSLdist = nz(atrVal) * atrMult
+float longSLatr  = close - atrSLdist
+float shortSLatr = close + atrSLdist
 
-// Long: pullback into golden zone + full bullish alignment + bullish candle
-bool longGZ = goldenTouch and isBull and close > open and close >= fib618 and not na(longSL) and strategy.position_size == 0
+// Swing-based SL (traditional)
+float longSLswing  = hasSwings ? swLow - nz(atrVal) * 0.5 : na
+float shortSLswing = hasSwings ? swHigh + nz(atrVal) * 0.5 : na
 
-// Short: retrace up into golden zone + full bearish alignment + bearish candle
-bool shortGZ = goldenTouch and isBear and close < open and close <= fib382 and not na(shortSL) and strategy.position_size == 0
+// Use the TIGHTER of swing-based and ATR-based (whichever is closer to price)
+float longSL  = not na(longSLswing) and longSLswing > longSLatr and longSLswing < close ? longSLswing : longSLatr < close ? longSLatr : na
+float shortSL = not na(shortSLswing) and shortSLswing < shortSLatr and shortSLswing > close ? shortSLswing : shortSLatr > close ? shortSLatr : na
+
+// TP from fib extensions + HTF levels
+float longTP1  = not na(ext127) and ext127 > close ? ext127 : not na(htf382) and htf382 > close ? htf382 : na
+float longTP2  = not na(ext162) and ext162 > close ? ext162 : not na(htfHigh) and htfHigh > close ? htfHigh : na
+float shortTP1 = hasSwings and (swLow - swRange * 0.272) < close ? swLow - swRange * 0.272 : not na(htf618) and htf618 < close ? htf618 : na
+float shortTP2 = hasSwings and (swLow - swRange * 0.618) < close ? swLow - swRange * 0.618 : not na(htfLow) and htfLow < close ? htfLow : na
+
+// =============================================================================
+// ENTRY LOGIC — Near ANY key fib level + SMA 150 direction + candle pattern
+// =============================================================================
+
+float fibDist = nz(atrVal) * fibProximity
+
+// Check if price is near any key fib level (current TF or HTF)
+bool nearFib382 = hasSwings and math.abs(close - fib382) < fibDist
+bool nearFib500 = hasSwings and math.abs(close - fib500) < fibDist
+bool nearFib618 = hasSwings and math.abs(close - fib618) < fibDist
+bool nearHTF382 = not na(htf382) and math.abs(close - htf382) < fibDist
+bool nearHTF500 = not na(htf500) and math.abs(close - htf500) < fibDist
+bool nearHTF618 = not na(htf618) and math.abs(close - htf618) < fibDist
+
+bool nearAnyFib = nearFib382 or nearFib500 or nearFib618 or nearHTF382 or nearHTF500 or nearHTF618
+
+// Long: above SMA 150 + near fib support + bullish candle pattern
+bool longGZ = nearAnyFib and isBull and bullConfirm and not na(longSL) and strategy.position_size == 0
+
+// Short: below SMA 150 + near fib resistance + bearish candle pattern
+bool shortGZ = nearAnyFib and isBear and bearConfirm and not na(shortSL) and strategy.position_size == 0
 
 // =============================================================================
 // POSITION SIZING & R:R
 // =============================================================================
 
-float longQty = na
-float longRR  = na
-float shortQty = na
-float shortRR  = na
+float longQty = na, float longRR = na
+float shortQty = na, float shortRR = na
 
 if longGZ and not na(longTP1) and not na(longSL)
     float sd = close - longSL
@@ -222,40 +251,24 @@ if shortGZ and not na(shortTP1) and not na(shortSL)
 // CONVICTION SCORING (0-100%)
 // =============================================================================
 
-float bullPts = 0.0
-float bearPts = 0.0
+float bullPts = 0.0, float bearPts = 0.0
 
-// SMA 150 direction (+20)
 bullPts += not na(sma150) and close > sma150 ? 20 : 0
 bearPts += not na(sma150) and close < sma150 ? 20 : 0
-
-// EMA 21 vs SMA 50 alignment (+15)
 bullPts += ema21 > sma50 ? 15 : 0
 bearPts += ema21 < sma50 ? 15 : 0
-
-// Price vs EMA 21 (+10)
 bullPts += close > ema21 ? 10 : 0
 bearPts += close < ema21 ? 10 : 0
-
-// Price vs SMA 50 (+10)
 bullPts += close > sma50 ? 10 : 0
 bearPts += close < sma50 ? 10 : 0
-
-// RSI positioning (+10) — not overbought/oversold
 bullPts += rsiVal > 50 and rsiVal < 70 ? 10 : 0
 bearPts += rsiVal < 50 and rsiVal > 30 ? 10 : 0
-
-// Golden zone interaction (+15)
-bullPts += hasSwings and close >= fib618 and close <= fib382 and isBull ? 15 : 0
-bearPts += hasSwings and close >= fib618 and close <= fib382 and isBear ? 15 : 0
-
-// AVWAP position (+10)
+bullPts += nearAnyFib and isBull ? 15 : 0
+bearPts += nearAnyFib and isBear ? 15 : 0
 bullPts += not na(avwap52) and close > avwap52 ? 10 : 0
 bearPts += not na(avwap52) and close < avwap52 ? 10 : 0
-
-// Candle direction (+10)
-bullPts += close > open ? 10 : 0
-bearPts += close < open ? 10 : 0
+bullPts += bullConfirm ? 10 : 0
+bearPts += bearConfirm ? 10 : 0
 
 float convPct = math.max(bullPts, bearPts)
 string convDir = bullPts > bearPts ? "Bullish" : bullPts < bearPts ? "Bearish" : "Neutral"
@@ -279,7 +292,7 @@ if goShort
     strategy.exit("STP2", "Short", qty_percent=100, limit=shortTP2, stop=shortSL)
 
 // =============================================================================
-// VISUALS — FIB LINES (RED = resistance, BLUE = support)
+// VISUALS — FIB LINES (current TF: RED/BLUE, HTF: dotted yellow)
 // =============================================================================
 
 var line ln236 = na, var label lb236 = na
@@ -291,6 +304,11 @@ var line lnE127 = na, var label lbE127 = na
 var line lnE162 = na, var label lbE162 = na
 var line lnHigh = na, var label lbHigh = na
 var line lnLow  = na, var label lbLow  = na
+
+// HTF fib lines
+var line lnHTF382 = na, var label lbHTF382 = na
+var line lnHTF500 = na, var label lbHTF500 = na
+var line lnHTF618 = na, var label lbHTF618 = na
 
 drawFibLine(float price, string txt, color col, int w, bool dashed) =>
     sty = dashed ? line.style_dashed : line.style_solid
@@ -343,6 +361,20 @@ if showFibs and redraw and hasSwings
         [le2, lbe2] = drawFibLine(ext162, "161.8%", color.new(color.green, 20), 1, true)
         lnE162 := le2, lbE162 := lbe2
 
+// HTF fib lines (dotted, yellow-ish)
+if showHTF and redraw and htfValid
+    line.delete(lnHTF382), label.delete(lbHTF382)
+    line.delete(lnHTF500), label.delete(lbHTF500)
+    line.delete(lnHTF618), label.delete(lbHTF618)
+
+    htfTF = timeframe.isintraday ? "D" : "W"
+    [lh1, lbh1] = drawFibLine(htf382, htfTF + " 38.2%", color.new(color.yellow, 30), 1, true)
+    lnHTF382 := lh1, lbHTF382 := lbh1
+    [lh2, lbh2] = drawFibLine(htf500, htfTF + " 50%", color.new(color.yellow, 30), 1, true)
+    lnHTF500 := lh2, lbHTF500 := lbh2
+    [lh3, lbh3] = drawFibLine(htf618, htfTF + " 61.8%", color.new(color.yellow, 30), 1, true)
+    lnHTF618 := lh3, lbHTF618 := lbh3
+
 // =============================================================================
 // VISUALS — BUY / SELL LABELS
 // =============================================================================
@@ -353,60 +385,49 @@ if showSignals and goLong
 if showSignals and goShort
     label.new(bar_index, high, "SELL", style=label.style_label_down, color=color.new(color.orange, 10), textcolor=color.white, size=size.normal)
 
-// Background when in trade
 bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na)
 
 // =============================================================================
-// DASHBOARD — bottom-left, blue theme
+// DASHBOARD (off by default — toggle on for full info)
 // =============================================================================
 
 dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 15, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
+    var table dash = table.new(position.bottom_left, 2, 16, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
 
-    // Row 0: Header
     table.cell(dash, 0, 0, "FibAlgo", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
     table.cell(dash, 1, 0, "STRATEGY", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
 
-    // Row 1: Conviction
     table.cell(dash, 0, 1, "Conviction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 1, str.tostring(convPct, "#") + "% " + convDir, text_color=convCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 2: Direction
     string dir = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : isBull ? "Bullish" : isBear ? "Bearish" : "Neutral"
     color dirCol = (strategy.position_size > 0 or isBull) ? color.green : (strategy.position_size < 0 or isBear) ? color.red : color.gray
     table.cell(dash, 0, 2, "Direction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 2, dir, text_color=dirCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 3: RS Rank
     color rsCol = not na(rsRank) and rsRank > 70 ? color.green : not na(rsRank) and rsRank > 30 ? color.yellow : color.red
     table.cell(dash, 0, 3, "RS Rank", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 3, not na(rsRank) ? str.tostring(rsRank, "#.#") : "—", text_color=rsCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 4: Price
     table.cell(dash, 0, 4, "Price", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 4, str.tostring(close, format.mintick), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 5: Qty
     float currentQty = strategy.position_size != 0 ? math.abs(strategy.position_size) : isBull and not na(longSL) and (close - longSL) > 0 ? math.max(1, math.floor(maxLossDollars / (close - longSL))) : isBear and not na(shortSL) and (shortSL - close) > 0 ? math.max(1, math.floor(maxLossDollars / (shortSL - close))) : na
     table.cell(dash, 0, 5, "Qty (auto)", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 5, not na(currentQty) ? str.tostring(currentQty, "#") : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 6: Max Loss
     table.cell(dash, 0, 6, "Max Loss", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 6, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 7: SL Long
     table.cell(dash, 0, 7, "SL Long", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 7, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 8: SL Short
     table.cell(dash, 0, 8, "SL Short", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 8, not na(shortSL) ? str.tostring(shortSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 9: TP1 / TP2
     float dTP1 = isBull ? longTP1 : shortTP1
     float dTP2 = isBull ? longTP2 : shortTP2
     table.cell(dash, 0, 9, "TP1 / TP2", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
@@ -414,7 +435,6 @@ if showDashboard and barstate.islast
     t2s = not na(dTP2) ? str.tostring(dTP2, format.mintick) : "—"
     table.cell(dash, 1, 9, t1s + " / " + t2s, text_color=color.green, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 10: R:R
     float dispRR = na
     if isBull and not na(longTP1) and not na(longSL) and (close - longSL) > 0
         dispRR := (longTP1 - close) / (close - longSL)
@@ -423,20 +443,19 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 10, "R:R", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 10, not na(dispRR) and dispRR > 0 ? str.tostring(dispRR, "#.##") + " : 1" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 11: AVWAP
     table.cell(dash, 0, 11, "AVWAP 52WH", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 11, not na(avwap52) ? str.tostring(avwap52, format.mintick) : "—", text_color=color.purple, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 12: ATR %
     table.cell(dash, 0, 12, "ATR %", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 12, not na(atrPct) ? str.tostring(atrPct, "#.##") + "%" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 13: Pivot
     table.cell(dash, 0, 13, "Pivot", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 13, str.tostring(actualPivotLen) + (autoPivot ? " (auto)" : ""), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    // Row 14: Signal Status
+    table.cell(dash, 0, 14, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 14, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
     string sigStat = goLong ? "BUY SIGNAL" : goShort ? "SELL SIGNAL" : "Waiting"
     color sigCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(dash, 0, 14, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 14, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 15, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 15, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
