@@ -22,11 +22,12 @@ sma50Len       = input.int(50, "SMA 50", minval=10, group="Trend")
 sma150Len      = input.int(150, "SMA 150 (Direction)", minval=50, group="Trend")
 
 showFibs       = input.bool(true, "Show Fib Lines", group="Display")
-showHTF        = input.bool(true, "Show Higher TF Fibs", group="Display")
+showHTF        = input.bool(false, "Show Higher TF Fibs", group="Display")
 showDashboard  = input.bool(true, "Show Dashboard", group="Display")
-showSignals    = input.bool(false, "Show BUY/SELL Labels", group="Display")
+showSignals    = input.bool(true, "Show BUY/SELL Labels", group="Display")
 showMAs        = input.bool(false, "Show MA Lines", group="Display")
-dashSize       = input.string("normal", "Dashboard Text Size", options=["tiny", "small", "normal", "large"], group="Display")
+showAVWAP      = input.bool(true, "Show AVWAP 52WH", group="Display")
+dashSize       = input.string("large", "Dashboard Text Size", options=["tiny", "small", "normal", "large"], group="Display")
 
 // =============================================================================
 // CORE CALCULATIONS
@@ -90,10 +91,10 @@ else
     cumVolPrice += hlc3 * volume
 
 float avwap52 = cumVol > 0 ? cumVolPrice / cumVol : na
-plot(avwap52, "AVWAP 52WH", color.new(color.purple, 30), 1, plot.style_line)
+plot(showAVWAP ? avwap52 : na, "AVWAP 52WH", color.new(color.purple, 30), 1, plot.style_line)
 
-bool avwapGoldenX = not na(avwap52) and ta.crossover(avwap52, sma50)
-plotchar(avwapGoldenX, "AVWAP Golden Cross", "★", location.belowbar, color.new(color.yellow, 0), size=size.small)
+bool avwapGoldenX = not na(avwap52) and not na(sma50) and ta.crossover(sma50, avwap52)
+plotchar(showAVWAP and avwapGoldenX ? true : false, "SMA50 x AVWAP", "★", location.belowbar, color.new(color.yellow, 0), size=size.normal)
 
 // =============================================================================
 // RELATIVE STRENGTH
@@ -400,7 +401,7 @@ if strategy.position_size < 0
         wasBelowEMA  := false
 
 // =============================================================================
-// VISUALS — FIB LINES (current TF: RED/BLUE, HTF: dotted yellow)
+// VISUALS — FIB LINES (white, clean)
 // =============================================================================
 
 var line ln236 = na, var label lb236 = na
@@ -437,36 +438,31 @@ if showFibs and redraw and hasSwings
     line.delete(lnHigh), label.delete(lbHigh)
     line.delete(lnLow), label.delete(lbLow)
 
-    [lH, labH] = drawFibLine(swHigh, "High", color.new(color.white, 50), 1, false)
+    [lH, labH] = drawFibLine(swHigh, "High", color.new(color.white, 30), 1, false)
     lnHigh := lH, lbHigh := labH
-    [lL, labL] = drawFibLine(swLow, "Low", color.new(color.white, 50), 1, false)
+    [lL, labL] = drawFibLine(swLow, "Low", color.new(color.white, 30), 1, false)
     lnLow := lL, lbLow := labL
 
-    c236 = close < fib236 ? color.new(color.red, 30) : color.new(color.blue, 30)
-    [l1, lb1] = drawFibLine(fib236, "23.6%", c236, 1, false)
+    [l1, lb1] = drawFibLine(fib236, "23.6%", color.new(color.white, 60), 1, false)
     ln236 := l1, lb236 := lb1
 
-    c382 = close < fib382 ? color.new(color.red, 10) : color.new(color.blue, 10)
-    [l2, lb2] = drawFibLine(fib382, "38.2%", c382, 2, false)
+    [l2, lb2] = drawFibLine(fib382, "38.2%", color.new(color.white, 40), 1, false)
     ln382 := l2, lb382 := lb2
 
-    c500 = close < fib500 ? color.new(color.red, 20) : color.new(color.blue, 20)
-    [l3, lb3] = drawFibLine(fib500, "50%", c500, 2, false)
+    [l3, lb3] = drawFibLine(fib500, "50%", color.new(color.white, 20), 2, false)
     ln500 := l3, lb500 := lb3
 
-    c618 = close < fib618 ? color.new(color.red, 10) : color.new(color.blue, 10)
-    [l4, lb4] = drawFibLine(fib618, "61.8%", c618, 2, false)
+    [l4, lb4] = drawFibLine(fib618, "61.8%", color.new(color.white, 10), 2, false)
     ln618 := l4, lb618 := lb4
 
-    c786 = close < fib786 ? color.new(color.red, 30) : color.new(color.blue, 30)
-    [l5, lb5] = drawFibLine(fib786, "78.6%", c786, 1, false)
+    [l5, lb5] = drawFibLine(fib786, "78.6%", color.new(color.white, 60), 1, false)
     ln786 := l5, lb786 := lb5
 
     if not na(ext127)
-        [le1, lbe1] = drawFibLine(ext127, "127.2%", color.new(color.green, 20), 1, true)
+        [le1, lbe1] = drawFibLine(ext127, "127.2%", color.new(color.white, 50), 1, true)
         lnE127 := le1, lbE127 := lbe1
     if not na(ext162)
-        [le2, lbe2] = drawFibLine(ext162, "161.8%", color.new(color.green, 20), 1, true)
+        [le2, lbe2] = drawFibLine(ext162, "161.8%", color.new(color.white, 50), 1, true)
         lnE162 := le2, lbE162 := lbe2
 
 // HTF fib lines (dotted, yellow-ish)
@@ -503,76 +499,76 @@ dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSi
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 18, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
+    var table dash = table.new(position.bottom_left, 2, 18, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
-    table.cell(dash, 0, 0, "FibAlgo", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
-    table.cell(dash, 1, 0, "STRATEGY", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
+    table.cell(dash, 0, 0, "  FibAlgo  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
+    table.cell(dash, 1, 0, "  STRATEGY  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
 
-    table.cell(dash, 0, 1, "Conviction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 1, str.tostring(convPct, "#") + "% " + convDir, text_color=convCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 1, "Conviction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 1, str.tostring(convPct, "#") + "% " + convDir, text_color=convCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     string dir = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : isBull ? "Bullish" : isBear ? "Bearish" : "Neutral"
     color dirCol = (strategy.position_size > 0 or isBull) ? color.green : (strategy.position_size < 0 or isBear) ? color.red : color.gray
-    table.cell(dash, 0, 2, "Direction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 2, dir, text_color=dirCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 2, "Direction", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 2, dir, text_color=dirCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     color rsCol = not na(rsRank) and rsRank > 70 ? color.green : not na(rsRank) and rsRank > 30 ? color.yellow : color.red
-    table.cell(dash, 0, 3, "RS Rank", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 3, not na(rsRank) ? str.tostring(rsRank, "#.#") : "—", text_color=rsCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 3, "RS Rank", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 3, not na(rsRank) ? str.tostring(rsRank, "#.#") : "—", text_color=rsCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 4, "Price", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 4, str.tostring(close, format.mintick), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 4, "Price", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 4, str.tostring(close, format.mintick), text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     float currentQty = strategy.position_size != 0 ? math.abs(strategy.position_size) : isBull and not na(longSL) and (close - longSL) > 0 ? math.max(1, math.floor(maxLossDollars / (close - longSL))) : isBear and not na(shortSL) and (shortSL - close) > 0 ? math.max(1, math.floor(maxLossDollars / (shortSL - close))) : na
-    table.cell(dash, 0, 5, "Qty (auto)", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 5, not na(currentQty) ? str.tostring(currentQty, "#") : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 5, "Qty (auto)", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 5, not na(currentQty) ? str.tostring(currentQty, "#") : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 6, "Max Loss", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 6, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 6, "Max Loss", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 6, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 7, "SL Long", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 7, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 7, "SL Long", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 7, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 8, "SL Short", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 8, not na(shortSL) ? str.tostring(shortSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 8, "SL Short", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 8, not na(shortSL) ? str.tostring(shortSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     float dTP1 = isBull ? longTP1 : shortTP1
     float dTP2 = isBull ? longTP2 : shortTP2
-    table.cell(dash, 0, 9, "TP1 / TP2", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 9, "TP1 / TP2", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     t1s = not na(dTP1) ? str.tostring(dTP1, format.mintick) : "—"
     t2s = not na(dTP2) ? str.tostring(dTP2, format.mintick) : "—"
-    table.cell(dash, 1, 9, t1s + " / " + t2s, text_color=color.green, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 9, t1s + " / " + t2s, text_color=color.green, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     float dispRR = na
     if isBull and not na(longTP1) and not na(longSL) and (close - longSL) > 0
         dispRR := (longTP1 - close) / (close - longSL)
     if isBear and not na(shortTP1) and not na(shortSL) and (shortSL - close) > 0
         dispRR := (close - shortTP1) / (shortSL - close)
-    table.cell(dash, 0, 10, "R:R", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 10, not na(dispRR) and dispRR > 0 ? str.tostring(dispRR, "#.##") + " : 1" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 10, "R:R", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 10, not na(dispRR) and dispRR > 0 ? str.tostring(dispRR, "#.##") + " : 1" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 11, "AVWAP 52WH", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 11, not na(avwap52) ? str.tostring(avwap52, format.mintick) : "—", text_color=color.purple, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 11, "AVWAP 52WH", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 11, not na(avwap52) ? str.tostring(avwap52, format.mintick) : "—", text_color=color.purple, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 12, "ATR %", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 12, not na(atrPct) ? str.tostring(atrPct, "#.##") + "%" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 12, "ATR %", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 12, not na(atrPct) ? str.tostring(atrPct, "#.##") + "%" : "—", text_color=color.yellow, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 13, "Pivot", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 13, str.tostring(actualPivotLen) + (autoPivot ? " (auto)" : ""), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 13, "Pivot", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 13, str.tostring(actualPivotLen) + (autoPivot ? " (auto)" : ""), text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     color adxCol = isTrending ? color.green : color.red
-    table.cell(dash, 0, 14, "ADX", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 14, str.tostring(adxVal, "#.#") + (isTrending ? " ✓" : " ✗"), text_color=adxCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 14, "ADX", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 14, str.tostring(adxVal, "#.#") + (isTrending ? " ✓" : " ✗"), text_color=adxCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     string divTxt = bullDivergence ? "Bull Div" : bearDivergence ? "Bear Div" : "None"
     color divCol = bullDivergence ? color.green : bearDivergence ? color.red : color.gray
-    table.cell(dash, 0, 15, "RSI Div", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 15, divTxt, text_color=divCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 15, "RSI Div", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 15, divTxt, text_color=divCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 16, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 16, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 16, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 16, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     string sigStat = goLong ? (ema21BounceLong ? "BUY (EMA)" : "BUY SIGNAL") : goShort ? (ema21BounceShort ? "SELL (EMA)" : "SELL SIGNAL") : "Waiting"
     color sigCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(dash, 0, 17, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 17, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 17, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 17, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
