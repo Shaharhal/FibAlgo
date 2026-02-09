@@ -1,6 +1,6 @@
 """
 Notification Channel Implementations
-Handles email, WhatsApp, and Discord notifications
+Handles email, WhatsApp, Discord, and Telegram notifications
 """
 
 import asyncio
@@ -221,4 +221,44 @@ async def send_discord(payload: dict, config: dict) -> bool:
         return False
     except Exception as e:
         logger.error(f"Discord error: {str(e)}", exc_info=True)
+        return False
+
+
+async def send_telegram(message: str, config: dict) -> bool:
+    """
+    Send Telegram message via Bot API
+
+    Args:
+        message: Plain text message (supports Markdown)
+        config: Dict containing bot_token, chat_id
+
+    Returns:
+        bool: True if message sent successfully, False otherwise
+    """
+    try:
+        bot_token = config['bot_token']
+        chat_id = config['chat_id']
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload) as response:
+                if response.status == 200:
+                    logger.info(f"Telegram message sent successfully")
+                    return True
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Telegram failed with status {response.status}: {error_text}")
+                    return False
+
+    except aiohttp.ClientError as e:
+        logger.error(f"Telegram HTTP error: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Telegram error: {str(e)}", exc_info=True)
         return False

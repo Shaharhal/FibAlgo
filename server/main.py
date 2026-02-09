@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 
-from notifiers import send_email, send_whatsapp, send_discord, format_message
+from notifiers import send_email, send_whatsapp, send_discord, send_telegram, format_message
 
 # Load environment variables
 load_dotenv()
@@ -129,6 +129,16 @@ def get_enabled_channels() -> dict:
             'webhook_url': os.getenv('DISCORD_WEBHOOK_URL')
         }
 
+    # Telegram channel
+    if all([
+        os.getenv('TELEGRAM_BOT_TOKEN'),
+        os.getenv('TELEGRAM_CHAT_ID')
+    ]):
+        channels['telegram'] = {
+            'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+            'chat_id': os.getenv('TELEGRAM_CHAT_ID')
+        }
+
     return channels
 
 
@@ -212,6 +222,20 @@ async def receive_webhook(signal: TradeSignal, request: Request):
         except Exception as e:
             failed.append('discord')
             logger.error(f"Discord notification error: {str(e)}", exc_info=True)
+
+    if 'telegram' in channels:
+        try:
+            message = format_message(payload)
+            success = await send_telegram(message, channels['telegram'])
+            if success:
+                notified.append('telegram')
+                logger.info(f"Telegram notification sent successfully")
+            else:
+                failed.append('telegram')
+                logger.error(f"Telegram notification failed")
+        except Exception as e:
+            failed.append('telegram')
+            logger.error(f"Telegram notification error: {str(e)}", exc_info=True)
 
     # Determine response status
     if notified:

@@ -1,5 +1,5 @@
 //@version=6
-strategy("FibAlgo Strategy", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1, max_lines_count=500, max_labels_count=500, max_boxes_count=50)
+strategy("FibAlgo Strategy", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, initial_capital=100000, commission_type=strategy.commission.percent, commission_value=0.1, slippage=1, pyramiding=2, max_lines_count=500, max_labels_count=500, max_boxes_count=50)
 
 // =============================================================================
 // INPUTS
@@ -15,10 +15,13 @@ minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, g
 minConv        = input.float(60, "Min Conviction %", minval=30, maxval=90, step=5, group="Risk Management", tooltip="Only enter when conviction score is above this threshold")
 fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
-exitR1         = input.float(1.0, "1st Exit (R)", minval=0.5, maxval=5.0, step=0.5, group="Exit Strategy", tooltip="Take 1st partial at this R-multiple and move SL to break-even")
-exitR2         = input.float(2.0, "2nd Exit (R)", minval=1.0, maxval=10.0, step=0.5, group="Exit Strategy", tooltip="Take 2nd partial at this R-multiple and trail SL to +1R")
-exitPct1       = input.int(33, "1st Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of position to close at 1st R target")
-exitPct2       = input.int(33, "2nd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of position to close at 2nd R target. Remainder trails with SMA 50")
+exitR1         = input.float(1.25, "1st Exit (R)", minval=0.5, maxval=5.0, step=0.25, group="Exit Strategy", tooltip="Sell 1st partial, move SL to BE, add pyramid shares")
+exitR2         = input.float(1.75, "2nd Exit (R)", minval=0.5, maxval=5.0, step=0.25, group="Exit Strategy")
+exitR3         = input.float(2.25, "3rd Exit (R)", minval=1.0, maxval=10.0, step=0.25, group="Exit Strategy")
+exitPct1       = input.int(25, "1st Exit %", minval=10, maxval=50, step=5, group="Exit Strategy")
+exitPct2       = input.int(25, "2nd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy")
+exitPct3       = input.int(20, "3rd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="Remainder (30%) trails with SMA 50")
+pyramidPct     = input.int(30, "Pyramid Add %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of original qty to add when SL moves to BE")
 useEMABounce   = input.bool(true, "EMA 21 Bounce Re-entry", group="Entry Strategy", tooltip="Allow re-entry when price bounces off EMA 21 in trend direction")
 
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
@@ -348,77 +351,145 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
 bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
-// Track R-multiple exit state
-var float entryPrice = na
-var float initialSL  = na
-var float riskDist   = na
-var bool  hitR1      = false
-var bool  hitR2      = false
+// Track R-multiple exit state — original position
+var float entryPrice  = na
+var float initialSL   = na
+var float riskDist    = na
+var float origQty     = na
+var bool  hitR1       = false
+var bool  hitR2       = false
+var bool  hitR3       = false
+// Track pyramid add-on
+var bool  pyramidDone = false
+var float pyEntry     = na
+var float pyRisk      = na
+var float pyQty       = na
+var bool  pyHitR2     = false  // pyramid's 1.75R
+var bool  pyHitR3     = false  // pyramid's 2.25R
 
 if goLong
     strategy.entry("Long", strategy.long, qty=longQty)
-    entryPrice := close
-    initialSL  := longSL
-    riskDist   := close - longSL
-    hitR1      := false
-    hitR2      := false
+    entryPrice  := close
+    initialSL   := longSL
+    riskDist    := close - longSL
+    origQty     := longQty
+    hitR1       := false
+    hitR2       := false
+    hitR3       := false
+    pyramidDone := false
+    pyHitR2     := false
+    pyHitR3     := false
     strategy.exit("LSL", "Long", stop=longSL)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
-    entryPrice := close
-    initialSL  := shortSL
-    riskDist   := shortSL - close
-    hitR1      := false
-    hitR2      := false
+    entryPrice  := close
+    initialSL   := shortSL
+    riskDist    := shortSL - close
+    origQty     := shortQty
+    hitR1       := false
+    hitR2       := false
+    hitR3       := false
+    pyramidDone := false
+    pyHitR2     := false
+    pyHitR3     := false
     strategy.exit("SSL", "Short", stop=shortSL)
 
 // --- R-Multiple Scaling: Longs ---
 if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
     float curProfit = close - entryPrice
 
-    // +1R: take 1/3, move SL to break-even
+    // +1.25R: sell 25%, move SL to BE, pyramid 30% more shares
     if not hitR1 and curProfit >= riskDist * exitR1
         hitR1 := true
-        float qty1 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct1 / 100.0))
-        if qty1 < math.abs(strategy.position_size)
-            strategy.order("L+1R", strategy.short, qty=qty1, comment=str.tostring(exitR1, "#.#") + "R partial")
+        float qty1 = math.max(1, math.floor(origQty * exitPct1 / 100.0))
+        strategy.order("L+R1", strategy.short, qty=qty1, comment=str.tostring(exitR1, "#.##") + "R")
         strategy.exit("LSL", "Long", stop=entryPrice)
+        // Pyramid: add 30% of original qty
+        if not pyramidDone
+            pyramidDone := true
+            pyQty   := math.max(1, math.floor(origQty * pyramidPct / 100.0))
+            pyEntry := close
+            pyRisk  := close - entryPrice  // SL is at BE (entry), so risk = current - entry
+            strategy.entry("Long", strategy.long, qty=pyQty)
 
-    // +2R: take 1/3, trail SL to +1R
+    // +1.75R: sell 25% of original
     if not hitR2 and curProfit >= riskDist * exitR2
         hitR2 := true
-        float qty2 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct2 / 100.0))
-        if qty2 < math.abs(strategy.position_size)
-            strategy.order("L+2R", strategy.short, qty=qty2, comment=str.tostring(exitR2, "#.#") + "R partial")
+        float qty2 = math.max(1, math.floor(origQty * exitPct2 / 100.0))
+        strategy.order("L+R2", strategy.short, qty=qty2, comment=str.tostring(exitR2, "#.##") + "R")
+        strategy.exit("LSL", "Long", stop=entryPrice + riskDist * 0.5)
+
+    // +2.25R: sell 20% of original
+    if not hitR3 and curProfit >= riskDist * exitR3
+        hitR3 := true
+        float qty3 = math.max(1, math.floor(origQty * exitPct3 / 100.0))
+        strategy.order("L+R3", strategy.short, qty=qty3, comment=str.tostring(exitR3, "#.##") + "R")
         strategy.exit("LSL", "Long", stop=entryPrice + riskDist)
 
-    // Runner: trail with SMA 50 — close below SMA 50 = full exit
-    if hitR2 and close < sma50
+    // Pyramid partials (based on pyramid's own R)
+    if pyramidDone and not na(pyEntry) and not na(pyRisk) and pyRisk > 0
+        float pyProfit = close - pyEntry
+        // Pyramid +1.75R: sell some pyramid shares
+        if not pyHitR2 and pyProfit >= pyRisk * exitR2
+            pyHitR2 := true
+            float pyQ2 = math.max(1, math.floor(pyQty * exitPct2 / 100.0))
+            strategy.order("LP+R2", strategy.short, qty=pyQ2, comment="Pyr " + str.tostring(exitR2, "#.##") + "R")
+        // Pyramid +2.25R: sell more pyramid shares
+        if not pyHitR3 and pyProfit >= pyRisk * exitR3
+            pyHitR3 := true
+            float pyQ3 = math.max(1, math.floor(pyQty * exitPct3 / 100.0))
+            strategy.order("LP+R3", strategy.short, qty=pyQ3, comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
+
+    // Runner: close below SMA 50 = exit everything remaining
+    if hitR3 and close < sma50
         strategy.close("Long", comment="Runner closed under SMA50")
 
 // --- R-Multiple Scaling: Shorts ---
 if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
     float curProfit = entryPrice - close
 
-    // +1R: take 1/3, move SL to break-even
+    // +1.25R: sell 25%, move SL to BE, pyramid 30% more shares
     if not hitR1 and curProfit >= riskDist * exitR1
         hitR1 := true
-        float qty1 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct1 / 100.0))
-        if qty1 < math.abs(strategy.position_size)
-            strategy.order("S+1R", strategy.long, qty=qty1, comment=str.tostring(exitR1, "#.#") + "R partial")
+        float qty1 = math.max(1, math.floor(origQty * exitPct1 / 100.0))
+        strategy.order("S+R1", strategy.long, qty=qty1, comment=str.tostring(exitR1, "#.##") + "R")
         strategy.exit("SSL", "Short", stop=entryPrice)
+        if not pyramidDone
+            pyramidDone := true
+            pyQty   := math.max(1, math.floor(origQty * pyramidPct / 100.0))
+            pyEntry := close
+            pyRisk  := entryPrice - close
+            strategy.entry("Short", strategy.short, qty=pyQty)
 
-    // +2R: take 1/3, trail SL to -1R
+    // +1.75R: sell 25% of original
     if not hitR2 and curProfit >= riskDist * exitR2
         hitR2 := true
-        float qty2 = math.max(1, math.floor(math.abs(strategy.position_size) * exitPct2 / 100.0))
-        if qty2 < math.abs(strategy.position_size)
-            strategy.order("S+2R", strategy.long, qty=qty2, comment=str.tostring(exitR2, "#.#") + "R partial")
+        float qty2 = math.max(1, math.floor(origQty * exitPct2 / 100.0))
+        strategy.order("S+R2", strategy.long, qty=qty2, comment=str.tostring(exitR2, "#.##") + "R")
+        strategy.exit("SSL", "Short", stop=entryPrice - riskDist * 0.5)
+
+    // +2.25R: sell 20% of original
+    if not hitR3 and curProfit >= riskDist * exitR3
+        hitR3 := true
+        float qty3 = math.max(1, math.floor(origQty * exitPct3 / 100.0))
+        strategy.order("S+R3", strategy.long, qty=qty3, comment=str.tostring(exitR3, "#.##") + "R")
         strategy.exit("SSL", "Short", stop=entryPrice - riskDist)
 
-    // Runner: trail with SMA 50 — close above SMA 50 = full exit
-    if hitR2 and close > sma50
+    // Pyramid partials (based on pyramid's own R)
+    if pyramidDone and not na(pyEntry) and not na(pyRisk) and pyRisk > 0
+        float pyProfit = pyEntry - close
+        if not pyHitR2 and pyProfit >= pyRisk * exitR2
+            pyHitR2 := true
+            float pyQ2 = math.max(1, math.floor(pyQty * exitPct2 / 100.0))
+            strategy.order("SP+R2", strategy.long, qty=pyQ2, comment="Pyr " + str.tostring(exitR2, "#.##") + "R")
+        if not pyHitR3 and pyProfit >= pyRisk * exitR3
+            pyHitR3 := true
+            float pyQ3 = math.max(1, math.floor(pyQty * exitPct3 / 100.0))
+            strategy.order("SP+R3", strategy.long, qty=pyQ3, comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
+
+    // Runner: close above SMA 50 = exit everything remaining
+    if hitR3 and close > sma50
         strategy.close("Short", comment="Runner closed above SMA50")
 
 // =============================================================================
