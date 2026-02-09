@@ -10,7 +10,7 @@ pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group=
 
 maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
-atrMult        = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
+atrMult        = input.float(2.0, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
 minRR          = input.float(2.5, "Min R:R", minval=1.0, maxval=5.0, step=0.1, group="Risk Management")
 fibProximity   = input.float(0.5, "Fib Proximity (ATR)", minval=0.1, maxval=2.0, step=0.1, group="Risk Management", tooltip="How close price must be to a fib level (in ATR units)")
 
@@ -35,6 +35,22 @@ ema21    = ta.ema(close, emaFastLen)
 sma50    = ta.sma(close, sma50Len)
 sma150   = ta.sma(close, sma150Len)
 rsiVal   = ta.rsi(close, 14)
+
+adxLen      = input.int(14, "ADX Length", minval=5, group="Filters")
+adxThresh   = input.float(25.0, "ADX Min Threshold", minval=15, maxval=50, step=1, group="Filters", tooltip="ADX > this = trending market. Below = choppy, no trades.")
+
+// ADX calculation (Pine Script v6 — manual DMI)
+float trVal    = ta.tr(true)
+float plusDM   = high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0
+float minusDM  = low[1] - low > high - high[1] ? math.max(low[1] - low, 0) : 0
+float smoothTR = ta.rma(trVal, adxLen)
+float plusDI    = smoothTR > 0 ? 100 * ta.rma(plusDM, adxLen) / smoothTR : 0
+float minusDI   = smoothTR > 0 ? 100 * ta.rma(minusDM, adxLen) / smoothTR : 0
+float diSum    = plusDI + minusDI
+float dx       = diSum > 0 ? 100 * math.abs(plusDI - minusDI) / diSum : 0
+float adxVal   = ta.rma(dx, adxLen)
+
+bool isTrending = adxVal > adxThresh
 
 plot(showMAs ? ema21 : na, "EMA 21", color.new(#00BCD4, 0), 2)
 plot(showMAs ? sma50 : na, "SMA 50", color.new(#FF5722, 0), 2)
@@ -178,6 +194,24 @@ bool bearConfirm = close < open or isShootingStar or isGravestoneDoji or isBearM
 string patternName = isBullMarubozu ? "Bull Marubozu" : isBearMarubozu ? "Bear Marubozu" : isBullEngulfing ? "Bull Engulfing" : isBearEngulfing ? "Bear Engulfing" : isHammer ? "Hammer" : isShootingStar ? "Shooting Star" : isDragonflyDoji ? "Dragonfly Doji" : isGravestoneDoji ? "Gravestone Doji" : isDoji ? "Doji" : isInsideBar ? "Inside Bar" : close > open ? "Bullish" : close < open ? "Bearish" : "Neutral"
 
 // =============================================================================
+// RSI DIVERGENCE DETECTION
+// =============================================================================
+
+// Bullish divergence: price makes lower low, RSI makes higher low (at fib support)
+float rsiLow1  = ta.lowest(rsiVal, actualPivotLen)
+float rsiLow2  = ta.lowest(rsiVal, actualPivotLen)[actualPivotLen]
+float priceLow1 = ta.lowest(low, actualPivotLen)
+float priceLow2 = ta.lowest(low, actualPivotLen)[actualPivotLen]
+bool bullDivergence = priceLow1 < priceLow2 and rsiLow1 > rsiLow2
+
+// Bearish divergence: price makes higher high, RSI makes lower high (at fib resistance)
+float rsiHigh1  = ta.highest(rsiVal, actualPivotLen)
+float rsiHigh2  = ta.highest(rsiVal, actualPivotLen)[actualPivotLen]
+float priceHigh1 = ta.highest(high, actualPivotLen)
+float priceHigh2 = ta.highest(high, actualPivotLen)[actualPivotLen]
+bool bearDivergence = priceHigh1 > priceHigh2 and rsiHigh1 < rsiHigh2
+
+// =============================================================================
 // SL / TP — ATR-CAPPED
 // =============================================================================
 
@@ -209,18 +243,19 @@ var bool longActive  = false
 var bool shortActive = false
 
 float fibDist = nz(atrVal) * fibProximity
+float goldenDist = fibDist * 1.5  // 61.8% gets wider zone (golden pocket)
 
 bool nearFib382 = hasSwings and math.abs(close - fib382) < fibDist
 bool nearFib500 = hasSwings and math.abs(close - fib500) < fibDist
-bool nearFib618 = hasSwings and math.abs(close - fib618) < fibDist
+bool nearFib618 = hasSwings and math.abs(close - fib618) < goldenDist
 bool nearHTF382 = not na(htf382) and math.abs(close - htf382) < fibDist
 bool nearHTF500 = not na(htf500) and math.abs(close - htf500) < fibDist
-bool nearHTF618 = not na(htf618) and math.abs(close - htf618) < fibDist
+bool nearHTF618 = not na(htf618) and math.abs(close - htf618) < goldenDist
 
 bool nearAnyFib = nearFib382 or nearFib500 or nearFib618 or nearHTF382 or nearHTF500 or nearHTF618
 
-bool longEntry  = nearAnyFib and isBull and bullConfirm and not na(longSL) and not longActive
-bool shortEntry = nearAnyFib and isBear and bearConfirm and not na(shortSL) and not shortActive
+bool longEntry  = nearAnyFib and isBull and bullConfirm and not na(longSL) and isTrending and not longActive
+bool shortEntry = nearAnyFib and isBear and bearConfirm and not na(shortSL) and isTrending and not shortActive
 
 bool validLong  = longEntry and not na(longRR) and longRR >= minRR
 bool validShort = shortEntry and not na(shortRR) and shortRR >= minRR
@@ -243,22 +278,26 @@ if newSwing
 
 float bullPts = 0.0, float bearPts = 0.0
 
-bullPts += not na(sma150) and close > sma150 ? 20 : 0
-bearPts += not na(sma150) and close < sma150 ? 20 : 0
-bullPts += ema21 > sma50 ? 15 : 0
-bearPts += ema21 < sma50 ? 15 : 0
+bullPts += not na(sma150) and close > sma150 ? 15 : 0
+bearPts += not na(sma150) and close < sma150 ? 15 : 0
+bullPts += ema21 > sma50 ? 10 : 0
+bearPts += ema21 < sma50 ? 10 : 0
 bullPts += close > ema21 ? 10 : 0
 bearPts += close < ema21 ? 10 : 0
 bullPts += close > sma50 ? 10 : 0
 bearPts += close < sma50 ? 10 : 0
-bullPts += rsiVal > 50 and rsiVal < 70 ? 10 : 0
-bearPts += rsiVal < 50 and rsiVal > 30 ? 10 : 0
-bullPts += nearAnyFib and isBull ? 15 : 0
-bearPts += nearAnyFib and isBear ? 15 : 0
+bullPts += rsiVal > 50 and rsiVal < 70 ? 5 : 0
+bearPts += rsiVal < 50 and rsiVal > 30 ? 5 : 0
+bullPts += nearAnyFib and isBull ? 10 : 0
+bearPts += nearAnyFib and isBear ? 10 : 0
 bullPts += not na(avwap52) and close > avwap52 ? 10 : 0
 bearPts += not na(avwap52) and close < avwap52 ? 10 : 0
 bullPts += bullConfirm ? 10 : 0
 bearPts += bearConfirm ? 10 : 0
+bullPts += isTrending ? 10 : 0
+bearPts += isTrending ? 10 : 0
+bullPts += bullDivergence ? 10 : 0
+bearPts += bearDivergence ? 10 : 0
 
 float convPct = math.max(bullPts, bearPts)
 string convDir = bullPts > bearPts ? "Bullish" : bullPts < bearPts ? "Bearish" : "Neutral"
@@ -390,7 +429,7 @@ dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSi
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.bottom_left, 2, 16, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
+    var table dash = table.new(position.bottom_left, 2, 18, bgcolor=color.new(color.blue, 40), border_width=1, border_color=color.new(color.blue, 20), frame_width=2, frame_color=color.new(color.blue, 10))
 
     table.cell(dash, 0, 0, "FibAlgo", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
     table.cell(dash, 1, 0, "INDICATOR", text_color=color.white, text_size=dSzH, bgcolor=color.new(color.blue, 20))
@@ -443,13 +482,22 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 13, "Pivot", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
     table.cell(dash, 1, 13, str.tostring(actualPivotLen) + (autoPivot ? " (auto)" : ""), text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
-    table.cell(dash, 0, 14, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 14, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    color adxCol = isTrending ? color.green : color.red
+    table.cell(dash, 0, 14, "ADX", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 14, str.tostring(adxVal, "#.#") + (isTrending ? " ✓" : " ✗"), text_color=adxCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
+    string divTxt = bullDivergence ? "Bull Div" : bearDivergence ? "Bear Div" : "None"
+    color divCol = bullDivergence ? color.green : bearDivergence ? color.red : color.gray
+    table.cell(dash, 0, 15, "RSI Div", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 15, divTxt, text_color=divCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+
+    table.cell(dash, 0, 16, "Pattern", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 16, patternName, text_color=color.white, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
     string sigStat = validLong ? "BUY SIGNAL" : validShort ? "SELL SIGNAL" : longActive ? "Long Active" : shortActive ? "Short Active" : "Waiting"
     color sigCol = validLong ? color.green : validShort ? color.red : longActive ? color.new(color.green, 50) : shortActive ? color.new(color.red, 50) : color.gray
-    table.cell(dash, 0, 15, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
-    table.cell(dash, 1, 15, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 0, 17, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(color.blue, 50))
+    table.cell(dash, 1, 17, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(color.blue, 50))
 
 // =============================================================================
 // ALERTS
