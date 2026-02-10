@@ -350,9 +350,11 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 // STRATEGY EXECUTION
 // =============================================================================
 
+// Warmup: all indicators must have enough data before any trades
+bool warmedUp = bar_index > sma150Len and not na(sma150) and not na(htfSMA150) and not na(adxVal) and not na(atrVal) and not na(ema21) and not na(sma50)
 bool inBTWindow = year >= btStartYear
-bool goLong  = inBTWindow and (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
-bool goShort = inBTWindow and (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
+bool goLong  = warmedUp and inBTWindow and (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
+bool goShort = warmedUp and inBTWindow and (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
 // Track R-multiple exit state — original position
 var float entryPrice  = na
