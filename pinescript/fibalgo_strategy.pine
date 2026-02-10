@@ -448,9 +448,9 @@ if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and ri
             float pyQ3 = math.max(1, math.floor(pyQty * exitPct3 / 100.0))
             strategy.order("LP+R3", strategy.short, qty=pyQ3, comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
 
-    // Runner: close below SMA 50 = exit everything (active after +1.75R)
-    if hitR2 and close < sma50
-        strategy.close("Long", comment="Runner closed under SMA50")
+    // Runner: candle closes below EMA 21 = exit everything (active after +1.75R)
+    if hitR2 and close < ema21
+        strategy.close("Long", comment="Runner closed under EMA21")
 
 // --- R-Multiple Scaling: Shorts ---
 if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
@@ -500,9 +500,9 @@ if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and ri
             float pyQ3 = math.max(1, math.floor(pyQty * exitPct3 / 100.0))
             strategy.order("SP+R3", strategy.long, qty=pyQ3, comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
 
-    // Runner: close above SMA 50 = exit everything (active after +1.75R)
-    if hitR2 and close > sma50
-        strategy.close("Short", comment="Runner closed above SMA50")
+    // Runner: candle closes above EMA 21 = exit everything (active after +1.75R)
+    if hitR2 and close > ema21
+        strategy.close("Short", comment="Runner closed above EMA21")
 
 // =============================================================================
 // VISUALS — FIB LINES (white, clean)
