@@ -5,6 +5,8 @@ strategy("FibAlgo Strategy", overlay=true, default_qty_type=strategy.fixed, defa
 // INPUTS
 // =============================================================================
 
+btStartYear    = input.int(2020, "Backtest Start Year", minval=2000, maxval=2030, group="Backtest")
+
 autoPivot      = input.bool(true, "Auto Pivot (by timeframe)", group="Swing Detection")
 pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group="Swing Detection", tooltip="Only used when Auto Pivot is off")
 
@@ -348,8 +350,9 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 // STRATEGY EXECUTION
 // =============================================================================
 
-bool goLong  = (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
-bool goShort = (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
+bool inBTWindow = year >= btStartYear
+bool goLong  = inBTWindow and (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
+bool goShort = inBTWindow and (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
 
 // Track R-multiple exit state — original position
 var float entryPrice  = na
