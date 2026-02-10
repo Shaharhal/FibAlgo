@@ -10,7 +10,9 @@ btStartYear    = input.int(2020, "Backtest Start Year", minval=2000, maxval=2030
 autoPivot      = input.bool(true, "Auto Pivot (by timeframe)", group="Swing Detection")
 pivotLen       = input.int(5, "Manual Pivot Length", minval=2, maxval=50, group="Swing Detection", tooltip="Only used when Auto Pivot is off")
 
-maxLossDollars = input.float(100, "Max Loss Per Trade ($)", minval=10, step=10, group="Risk Management")
+equityPctInit  = input.float(5.0, "Initial Risk % of Equity", minval=1, maxval=20, step=0.5, group="Risk Management", tooltip="% of equity risked on initial entry (e.g., 5% of $10K = $500 risk)")
+equityPctAdd   = input.float(5.0, "Pyramid Risk % of Equity", minval=1, maxval=20, step=0.5, group="Risk Management", tooltip="Additional % risked when pyramiding into winners")
+equityPctMax   = input.float(15.0, "Max Total Risk % of Equity", minval=5, maxval=30, step=0.5, group="Risk Management", tooltip="Cap total risk at this % of equity")
 atrLen         = input.int(14, "ATR Length", minval=1, group="Risk Management")
 atrMult        = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk Management", tooltip="SL = ATR * this value from entry. Caps the max SL distance.")
 minRR          = input.float(1.0, "Min R:R", minval=0.5, maxval=5.0, step=0.1, group="Risk Management")
@@ -23,7 +25,6 @@ exitR3         = input.float(2.25, "3rd Exit (R)", minval=1.0, maxval=10.0, step
 exitPct1       = input.int(25, "1st Exit %", minval=10, maxval=50, step=5, group="Exit Strategy")
 exitPct2       = input.int(25, "2nd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy")
 exitPct3       = input.int(20, "3rd Exit %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="Remainder (30%) trails with SMA 50")
-pyramidPct     = input.int(30, "Pyramid Add %", minval=10, maxval=50, step=5, group="Exit Strategy", tooltip="% of original qty to add when SL moves to BE")
 useEMABounce   = input.bool(true, "EMA 21 Bounce Re-entry", group="Entry Strategy", tooltip="Allow re-entry when price bounces off EMA 21 in trend direction")
 
 emaFastLen     = input.int(21, "EMA 21 (Fast)", minval=5, group="Trend")
@@ -51,6 +52,12 @@ rsiVal   = ta.rsi(close, 14)
 
 adxLen      = input.int(14, "ADX Length", minval=5, group="Filters")
 adxThresh   = input.float(25.0, "ADX Min Threshold", minval=15, maxval=50, step=1, group="Filters", tooltip="ADX > this = trending market. Below = choppy, no trades.")
+volMult     = input.float(1.5, "Volume Multiplier", minval=1.0, maxval=5.0, step=0.1, group="Filters", tooltip="Volume must exceed avg volume * this for entry confirmation")
+volLen      = input.int(20, "Volume SMA Length", minval=5, maxval=100, group="Filters")
+useMarketRegime = input.bool(true, "Market Regime Filter", group="Filters", tooltip="Check market index trend — skip longs in bear markets, skip shorts in bull")
+marketETF   = input.symbol("SPY", "Market Index ETF", group="Filters", tooltip="Market index to check regime (SPY, QQQ, etc.)")
+useRSFilter = input.bool(true, "RS Rank Filter", group="Filters", tooltip="Only long strong stocks (RS > threshold), only short weak stocks")
+minRS       = input.float(70, "Min RS Rank (Longs)", minval=30, maxval=90, step=5, group="Filters", tooltip="Longs need RS above this. Shorts need RS below (100 - this).")
 
 // ADX calculation (Pine Script v6 — manual DMI)
 float trVal    = ta.tr(true)
@@ -65,11 +72,21 @@ float adxVal   = ta.rma(dx, adxLen)
 
 bool isTrending = adxVal > adxThresh
 
+// Volume confirmation
+volSMA   = ta.sma(volume, volLen)
+bool highVol = not na(volSMA) and volume > volSMA * volMult
+
 // Sector ETF trend
 sectorClose  = request.security(sectorETF, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
 sectorSMA150 = request.security(sectorETF, timeframe.period, ta.sma(close, 150), barmerge.gaps_off, barmerge.lookahead_off)
 bool sectorBull = not na(sectorClose) and not na(sectorSMA150) and sectorClose > sectorSMA150
 bool sectorBear = not na(sectorClose) and not na(sectorSMA150) and sectorClose < sectorSMA150
+
+// Market regime (SPY/QQQ trend — broad market health)
+marketClose  = request.security(marketETF, "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+marketSMA150 = request.security(marketETF, "D", ta.sma(close, 150), barmerge.gaps_off, barmerge.lookahead_off)
+bool marketBull = not useMarketRegime or (not na(marketClose) and not na(marketSMA150) and marketClose > marketSMA150)
+bool marketBear = not useMarketRegime or (not na(marketClose) and not na(marketSMA150) and marketClose < marketSMA150)
 
 plot(showMAs ? ema21 : na, "EMA 21", color.new(#00BCD4, 0), 2)
 plot(showMAs ? sma50 : na, "SMA 50", color.new(#FF5722, 0), 2)
@@ -280,15 +297,15 @@ bool nearHTF618 = not na(htf618) and math.abs(close - htf618) < goldenDist
 
 bool nearAnyFib = nearFib500 or nearFib618 or nearHTF500 or nearHTF618
 
-// Long: above SMA 150 + HTF aligned + near fib support + bullish candle + trending market
-bool longGZ = nearAnyFib and isBull and htfBull and bullConfirm and not na(longSL) and isTrending and strategy.position_size == 0
+// Long: above SMA 150 + HTF aligned + near fib support + bullish candle + trending + volume + market regime
+bool longGZ = nearAnyFib and isBull and htfBull and bullConfirm and not na(longSL) and isTrending and highVol and marketBull and strategy.position_size == 0
 
-// Short: below SMA 150 + HTF aligned + near fib resistance + bearish candle + trending market
-bool shortGZ = nearAnyFib and isBear and htfBear and bearConfirm and not na(shortSL) and isTrending and strategy.position_size == 0
+// Short: below SMA 150 + HTF aligned + near fib resistance + bearish candle + trending + volume + market regime
+bool shortGZ = nearAnyFib and isBear and htfBear and bearConfirm and not na(shortSL) and isTrending and highVol and marketBear and strategy.position_size == 0
 
 // EMA 21 bounce re-entry (trend continuation)
-bool ema21BounceLong  = useEMABounce and strategy.position_size == 0 and isBull and htfBull and isTrending and low <= ema21 and close > ema21 and bullConfirm and not na(longSL)
-bool ema21BounceShort = useEMABounce and strategy.position_size == 0 and isBear and htfBear and isTrending and high >= ema21 and close < ema21 and bearConfirm and not na(shortSL)
+bool ema21BounceLong  = useEMABounce and strategy.position_size == 0 and isBull and htfBull and isTrending and highVol and marketBull and low <= ema21 and close > ema21 and bullConfirm and not na(longSL)
+bool ema21BounceShort = useEMABounce and strategy.position_size == 0 and isBear and htfBear and isTrending and highVol and marketBear and high >= ema21 and close < ema21 and bearConfirm and not na(shortSL)
 
 // =============================================================================
 // POSITION SIZING & R:R
@@ -303,7 +320,8 @@ if (longGZ or ema21BounceLong) and not na(longSL)
         float r1 = not na(longTP1) ? (longTP1 - close) : 0
         float r2 = not na(longTP2) ? (longTP2 - close) : r1
         longRR  := (0.5 * r1 + 0.5 * r2) / sd
-        longQty := math.max(1, math.floor(maxLossDollars / sd))
+        float riskAmt = strategy.equity * equityPctInit / 100.0
+        longQty := math.max(1, math.floor(riskAmt / sd))
 
 if (shortGZ or ema21BounceShort) and not na(shortSL)
     float sd = shortSL - close
@@ -311,7 +329,8 @@ if (shortGZ or ema21BounceShort) and not na(shortSL)
         float r1 = not na(shortTP1) ? (close - shortTP1) : 0
         float r2 = not na(shortTP2) ? (close - shortTP2) : r1
         shortRR  := (0.5 * r1 + 0.5 * r2) / sd
-        shortQty := math.max(1, math.floor(maxLossDollars / sd))
+        float riskAmt = strategy.equity * equityPctInit / 100.0
+        shortQty := math.max(1, math.floor(riskAmt / sd))
 
 // =============================================================================
 // CONVICTION SCORING (0-100%)
@@ -353,8 +372,10 @@ color convCol = bullPts > bearPts ? color.green : bullPts < bearPts ? color.red 
 // Warmup: all indicators must have enough data before any trades
 bool warmedUp = bar_index > sma150Len and not na(sma150) and not na(htfSMA150) and not na(adxVal) and not na(atrVal) and not na(ema21) and not na(sma50)
 bool inBTWindow = year >= btStartYear
-bool goLong  = warmedUp and inBTWindow and (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv
-bool goShort = warmedUp and inBTWindow and (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv
+bool rsOK_long  = not useRSFilter or (not na(rsRank) and rsRank >= minRS)
+bool rsOK_short = not useRSFilter or (not na(rsRank) and rsRank <= (100 - minRS))
+bool goLong  = warmedUp and inBTWindow and (longGZ or ema21BounceLong) and not na(longRR) and longRR >= minRR and bullPts >= minConv and rsOK_long
+bool goShort = warmedUp and inBTWindow and (shortGZ or ema21BounceShort) and not na(shortRR) and shortRR >= minRR and bearPts >= minConv and rsOK_short
 
 // Track R-multiple exit state — original position
 var float entryPrice  = na
@@ -422,9 +443,10 @@ if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and ri
         strategy.exit("LSL", "Long", stop=entryPrice)
         if not pyramidDone
             pyramidDone := true
-            pyQty   := math.max(1, math.floor(origQty * pyramidPct / 100.0))
             pyEntry := close
             pyRisk  := close - entryPrice
+            float pyRiskAmt = strategy.equity * math.min(equityPctAdd, equityPctMax - equityPctInit) / 100.0
+            pyQty   := pyRisk > 0 ? math.max(1, math.floor(pyRiskAmt / pyRisk)) : 1
             strategy.entry("Long", strategy.long, qty=pyQty)
 
     // +1.75R: sell 25% of original, trail SL to +0.5R
@@ -474,9 +496,10 @@ if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and ri
         strategy.exit("SSL", "Short", stop=entryPrice)
         if not pyramidDone
             pyramidDone := true
-            pyQty   := math.max(1, math.floor(origQty * pyramidPct / 100.0))
             pyEntry := close
             pyRisk  := entryPrice - close
+            float pyRiskAmt = strategy.equity * math.min(equityPctAdd, equityPctMax - equityPctInit) / 100.0
+            pyQty   := pyRisk > 0 ? math.max(1, math.floor(pyRiskAmt / pyRisk)) : 1
             strategy.entry("Short", strategy.short, qty=pyQty)
 
     // +1.75R: sell 25% of original, trail SL to -0.5R
@@ -608,7 +631,7 @@ dSz = dashSize == "tiny" ? size.tiny : dashSize == "small" ? size.small : dashSi
 dSzH = dashSize == "tiny" ? size.small : dashSize == "small" ? size.normal : dashSize == "large" ? size.huge : size.large
 
 if showDashboard and barstate.islast
-    var table dash = table.new(position.top_right, 2, 19, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+    var table dash = table.new(position.top_right, 2, 21, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
     table.cell(dash, 0, 0, "  FibAlgo  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
     table.cell(dash, 1, 0, "  STRATEGY  ", text_color=color.white, text_size=dSzH, bgcolor=color.new(#0f3460, 0))
@@ -628,12 +651,13 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 4, "Price", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     table.cell(dash, 1, 4, str.tostring(close, format.mintick), text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    float currentQty = strategy.position_size != 0 ? math.abs(strategy.position_size) : isBull and not na(longSL) and (close - longSL) > 0 ? math.max(1, math.floor(maxLossDollars / (close - longSL))) : isBear and not na(shortSL) and (shortSL - close) > 0 ? math.max(1, math.floor(maxLossDollars / (shortSL - close))) : na
+    float eqRisk = strategy.equity * equityPctInit / 100.0
+    float currentQty = strategy.position_size != 0 ? math.abs(strategy.position_size) : isBull and not na(longSL) and (close - longSL) > 0 ? math.max(1, math.floor(eqRisk / (close - longSL))) : isBear and not na(shortSL) and (shortSL - close) > 0 ? math.max(1, math.floor(eqRisk / (shortSL - close))) : na
     table.cell(dash, 0, 5, "Qty (auto)", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     table.cell(dash, 1, 5, not na(currentQty) ? str.tostring(currentQty, "#") : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
-    table.cell(dash, 0, 6, "Max Loss", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
-    table.cell(dash, 1, 6, "$ " + str.tostring(maxLossDollars, "#"), text_color=color.red, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 0, 6, "Equity Risk", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 6, str.tostring(equityPctInit, "#.#") + "% → " + str.tostring(equityPctMax, "#.#") + "% ($" + str.tostring(eqRisk, "#") + ")", text_color=color.red, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
     table.cell(dash, 0, 7, "SL Long", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     table.cell(dash, 1, 7, not na(longSL) ? str.tostring(longSL, format.mintick) : "—", text_color=color.white, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
@@ -682,7 +706,18 @@ if showDashboard and barstate.islast
     table.cell(dash, 0, 17, "Sector", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
     table.cell(dash, 1, 17, sectorTxt, text_color=sectorCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
 
+    bool mktUp = not na(marketClose) and not na(marketSMA150) and marketClose > marketSMA150
+    string mktTxt = not useMarketRegime ? "Off" : mktUp ? "Bullish" : "Bearish"
+    color mktCol = not useMarketRegime ? color.gray : mktUp ? color.green : color.red
+    table.cell(dash, 0, 18, "Market", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 18, mktTxt, text_color=mktCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+
+    string volTxt = highVol ? "High ✓" : "Low ✗"
+    color volCol = highVol ? color.green : color.red
+    table.cell(dash, 0, 19, "Volume", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 19, volTxt + " (" + str.tostring(volMult, "#.#") + "x)", text_color=volCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+
     string sigStat = goLong ? (ema21BounceLong ? "BUY (EMA)" : "BUY SIGNAL") : goShort ? (ema21BounceShort ? "SELL (EMA)" : "SELL SIGNAL") : "Waiting"
     color sigCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(dash, 0, 18, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
-    table.cell(dash, 1, 18, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 0, 20, "Signal", text_color=color.new(color.white, 30), text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(dash, 1, 20, sigStat, text_color=sigCol, text_size=dSz, bgcolor=color.new(#1a1a2e, 0))
