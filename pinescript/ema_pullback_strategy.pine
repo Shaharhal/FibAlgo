@@ -33,6 +33,7 @@ useVol         = input.bool(false, "Volume Filter", group="Filters")
 volMult        = input.float(1.3, "Volume Multiplier", minval=1.0, maxval=5.0, step=0.1, group="Filters")
 useBTCD        = input.bool(false, "BTC.D Filter (Alts)", group="Filters", tooltip="Only long alts when BTC dominance is falling. Turn ON for crypto alts, OFF for stocks/BTC.")
 btcdEmaLen     = input.int(50, "BTC.D EMA Length", minval=10, maxval=200, group="Filters")
+useETHBTC      = input.bool(false, "ETH/BTC Filter (Alts)", group="Filters", tooltip="Confirm altseason: ETH outperforming BTC. Double-confirms with BTC.D.")
 
 // Display
 showEMA        = input.bool(true, "Show EMA", group="Display")
@@ -76,6 +77,11 @@ btcdClose = request.security("CRYPTOCAP:BTC.D", "D", close, barmerge.gaps_off, b
 btcdEma   = request.security("CRYPTOCAP:BTC.D", "D", ta.ema(close, btcdEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
 bool btcdOK = not useBTCD or (not na(btcdClose) and not na(btcdEma) and btcdClose < btcdEma)
 
+// ETH/BTC filter — ETH outperforming BTC = altseason confirmation
+ethbtcClose = request.security("BINANCE:ETHBTC", "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+ethbtcEma   = request.security("BINANCE:ETHBTC", "D", ta.ema(close, 50), barmerge.gaps_off, barmerge.lookahead_off)
+bool ethbtcOK = not useETHBTC or (not na(ethbtcClose) and not na(ethbtcEma) and ethbtcClose > ethbtcEma)
+
 // =============================================================================
 // ENTRY — EMA PULLBACK BOUNCE
 // =============================================================================
@@ -89,7 +95,7 @@ bool bullCandle = close > open
 bool bearCandle = close < open
 
 // Pullback long: uptrend + wick touches EMA + closes above it + green candle
-bool pullbackLong = uptrend and not na(ema) and low <= ema and close > ema and bullCandle and volOK and adxOK and btcdOK and strategy.position_size == 0
+bool pullbackLong = uptrend and not na(ema) and low <= ema and close > ema and bullCandle and volOK and adxOK and btcdOK and ethbtcOK and strategy.position_size == 0
 
 // Pullback short: downtrend + wick touches EMA + closes below it + red candle
 bool pullbackShort = downtrend and not na(ema) and high >= ema and close < ema and bearCandle and volOK and adxOK and strategy.position_size == 0
@@ -152,6 +158,7 @@ if goLong
     hitR1 := false, hitR2 := false, hitR3 := false
     pyramidDone := false, pyHitR2 := false, pyHitR3 := false
     strategy.exit("LSL", "Long", stop=longSL)
+    alert('{"action":"BUY","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(longSL) + ',"timeframe":"' + timeframe.period + '"}', alert.freq_once_per_bar_close)
 
 if goShort
     strategy.entry("Short", strategy.short, qty=shortQty)
@@ -163,6 +170,7 @@ if goShort
     hitR1 := false, hitR2 := false, hitR3 := false
     pyramidDone := false, pyHitR2 := false, pyHitR3 := false
     strategy.exit("SSL", "Short", stop=shortSL)
+    alert('{"action":"SELL","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"sl":' + str.tostring(shortSL) + ',"timeframe":"' + timeframe.period + '"}', alert.freq_once_per_bar_close)
 
 // =============================================================================
 // R-MULTIPLE EXITS — LONGS
@@ -175,6 +183,7 @@ if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and ri
     // Time stop
     if not hitR1 and bars >= timeStop and profit <= 0
         strategy.close("Long", comment="Time stop")
+        alert('{"action":"CLOSE_LONG","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"reason":"time_stop"}', alert.freq_once_per_bar_close)
 
     // +R1: partial + pyramid
     if not hitR1 and profit >= riskDist * exitR1
@@ -214,6 +223,7 @@ if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and ri
     // Runner: close below EMA = done
     if hitR2 and close < ema
         strategy.close("Long", comment="Runner EMA exit")
+        alert('{"action":"CLOSE_LONG","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"reason":"runner_ema"}', alert.freq_once_per_bar_close)
 
 // =============================================================================
 // R-MULTIPLE EXITS — SHORTS
@@ -226,6 +236,7 @@ if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and ri
     // Time stop
     if not hitR1 and bars >= timeStop and profit <= 0
         strategy.close("Short", comment="Time stop")
+        alert('{"action":"CLOSE_SHORT","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"reason":"time_stop"}', alert.freq_once_per_bar_close)
 
     // +R1: partial + pyramid
     if not hitR1 and profit >= riskDist * exitR1
@@ -265,6 +276,7 @@ if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and ri
     // Runner: close above EMA = done
     if hitR2 and close > ema
         strategy.close("Short", comment="Runner EMA exit")
+        alert('{"action":"CLOSE_SHORT","symbol":"' + syminfo.ticker + '","price":' + str.tostring(close) + ',"reason":"runner_ema"}', alert.freq_once_per_bar_close)
 
 // =============================================================================
 // SIGNALS
@@ -282,7 +294,7 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.posit
 // =============================================================================
 
 if showDash and barstate.islast
-    var table d = table.new(position.top_right, 2, 9, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+    var table d = table.new(position.top_right, 2, 10, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
     table.cell(d, 0, 0, "EMA Pullback", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
     table.cell(d, 1, 0, "STRATEGY", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
@@ -316,7 +328,12 @@ if showDash and barstate.islast
     table.cell(d, 0, 7, "BTC.D", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
     table.cell(d, 1, 7, btcdTxt, text_color=btcdCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
 
+    string ethTxt = not useETHBTC ? "Off" : ethbtcOK ? "ETH leads" : "BTC leads"
+    color ethCol = not useETHBTC ? color.gray : ethbtcOK ? color.green : color.red
+    table.cell(d, 0, 8, "ETH/BTC", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 8, ethTxt, text_color=ethCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
     string sig = goLong ? "BUY" : goShort ? "SELL" : "Waiting"
     color sCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(d, 0, 8, "Signal", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
-    table.cell(d, 1, 8, sig, text_color=sCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 0, 9, "Signal", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 9, sig, text_color=sCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
