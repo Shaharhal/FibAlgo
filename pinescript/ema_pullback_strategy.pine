@@ -1,0 +1,310 @@
+//@version=6
+strategy("EMA Pullback Strategy", overlay=true, default_qty_type=strategy.fixed, default_qty_value=1, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.075, slippage=1, pyramiding=2, max_lines_count=100, max_labels_count=100)
+
+// =============================================================================
+// INPUTS
+// =============================================================================
+
+// Trend & Entry
+emaPullback    = input.int(21, "EMA Pullback", minval=5, group="Trend", tooltip="The EMA price pulls back to before bouncing")
+smaTrend       = input.int(150, "SMA Trend", minval=50, group="Trend", tooltip="Overall trend direction — only long above, short below")
+atrLen         = input.int(14, "ATR Length", minval=1, group="Risk")
+atrMult        = input.float(1.5, "ATR SL Multiplier", minval=0.5, maxval=5.0, step=0.1, group="Risk")
+minRR          = input.float(1.5, "Min R:R", minval=0.5, maxval=5.0, step=0.5, group="Risk")
+
+// Position Sizing
+equityPctInit  = input.float(5.0, "Initial Risk %", minval=1, maxval=20, step=0.5, group="Risk", tooltip="% of equity risked per trade")
+equityPctAdd   = input.float(5.0, "Pyramid Risk %", minval=1, maxval=20, step=0.5, group="Risk")
+equityPctMax   = input.float(15.0, "Max Risk %", minval=5, maxval=30, step=0.5, group="Risk")
+
+// Exit (R-multiples)
+exitR1         = input.float(1.25, "1st Exit R", minval=0.5, maxval=5.0, step=0.25, group="Exits")
+exitR2         = input.float(1.75, "2nd Exit R", minval=0.5, maxval=5.0, step=0.25, group="Exits")
+exitR3         = input.float(2.25, "3rd Exit R", minval=1.0, maxval=10.0, step=0.25, group="Exits")
+exitPct1       = input.int(25, "1st Exit %", minval=10, maxval=50, step=5, group="Exits")
+exitPct2       = input.int(25, "2nd Exit %", minval=10, maxval=50, step=5, group="Exits")
+exitPct3       = input.int(20, "3rd Exit %", minval=10, maxval=50, step=5, group="Exits")
+timeStop       = input.int(5, "Time Stop (bars)", minval=2, maxval=30, group="Exits", tooltip="Kill trade if not in profit after N bars")
+
+// Optional Filters
+useADX         = input.bool(false, "ADX Filter", group="Filters")
+adxThresh      = input.float(20.0, "ADX Threshold", minval=10, maxval=50, group="Filters")
+useVol         = input.bool(false, "Volume Filter", group="Filters")
+volMult        = input.float(1.3, "Volume Multiplier", minval=1.0, maxval=5.0, step=0.1, group="Filters")
+
+// Display
+showEMA        = input.bool(true, "Show EMA", group="Display")
+showSMA        = input.bool(true, "Show SMA", group="Display")
+showSignals    = input.bool(true, "Show Signals", group="Display")
+showDash       = input.bool(true, "Show Dashboard", group="Display")
+
+// =============================================================================
+// CALCULATIONS
+// =============================================================================
+
+ema  = ta.ema(close, emaPullback)
+sma  = ta.sma(close, smaTrend)
+atr  = ta.atr(atrLen)
+
+plot(showEMA ? ema : na, "EMA", color.new(#00BCD4, 0), 2)
+plot(showSMA ? sma : na, "SMA", color.new(#FFEB3B, 40), 1)
+
+// ADX (only calc if needed)
+float adxVal = 0.0
+if useADX
+    float trVal   = ta.tr(true)
+    float pDM     = high - high[1] > low[1] - low ? math.max(high - high[1], 0) : 0
+    float mDM     = low[1] - low > high - high[1] ? math.max(low[1] - low, 0) : 0
+    float sTR     = ta.rma(trVal, 14)
+    float pDI     = sTR > 0 ? 100 * ta.rma(pDM, 14) / sTR : 0
+    float mDI     = sTR > 0 ? 100 * ta.rma(mDM, 14) / sTR : 0
+    float dSum    = pDI + mDI
+    float dxVal   = dSum > 0 ? 100 * math.abs(pDI - mDI) / dSum : 0
+    adxVal := ta.rma(dxVal, 14)
+
+// Volume
+volSMA = ta.sma(volume, 20)
+bool volOK = not useVol or (not na(volSMA) and volume > volSMA * volMult)
+
+// ADX check
+bool adxOK = not useADX or adxVal > adxThresh
+
+// =============================================================================
+// ENTRY — EMA PULLBACK BOUNCE
+// =============================================================================
+
+// Trend direction
+bool uptrend   = not na(sma) and close > sma
+bool downtrend = not na(sma) and close < sma
+
+// Bullish candle (simple)
+bool bullCandle = close > open
+bool bearCandle = close < open
+
+// Pullback long: uptrend + wick touches EMA + closes above it + green candle
+bool pullbackLong = uptrend and not na(ema) and low <= ema and close > ema and bullCandle and volOK and adxOK and strategy.position_size == 0
+
+// Pullback short: downtrend + wick touches EMA + closes below it + red candle
+bool pullbackShort = downtrend and not na(ema) and high >= ema and close < ema and bearCandle and volOK and adxOK and strategy.position_size == 0
+
+// =============================================================================
+// SL / TP / SIZING
+// =============================================================================
+
+float longSL  = not na(ema) and not na(atr) ? ema - atr * atrMult : na
+float shortSL = not na(ema) and not na(atr) ? ema + atr * atrMult : na
+
+float longQty = na, float shortQty = na
+float longRR  = na, float shortRR  = na
+
+if pullbackLong and not na(longSL) and close > longSL
+    float sd = close - longSL
+    if sd > 0
+        longRR  := (atr * 3) / sd  // estimate 3 ATR upside
+        float riskAmt = strategy.equity * equityPctInit / 100.0
+        longQty := math.max(1, math.floor(riskAmt / sd))
+
+if pullbackShort and not na(shortSL) and close < shortSL
+    float sd = shortSL - close
+    if sd > 0
+        shortRR  := (atr * 3) / sd
+        float riskAmt = strategy.equity * equityPctInit / 100.0
+        shortQty := math.max(1, math.floor(riskAmt / sd))
+
+// Warmup
+bool warmedUp = bar_index > smaTrend and not na(sma) and not na(ema) and not na(atr)
+bool goLong   = warmedUp and pullbackLong and not na(longRR) and longRR >= minRR
+bool goShort  = warmedUp and pullbackShort and not na(shortRR) and shortRR >= minRR
+
+// =============================================================================
+// EXECUTION
+// =============================================================================
+
+var float entryPrice  = na
+var float initialSL   = na
+var float riskDist    = na
+var float origQty     = na
+var int   entryBar    = na
+var bool  hitR1       = false
+var bool  hitR2       = false
+var bool  hitR3       = false
+var bool  pyramidDone = false
+var float pyEntry     = na
+var float pyRisk      = na
+var float pyQty       = na
+var bool  pyHitR2     = false
+var bool  pyHitR3     = false
+
+if goLong
+    strategy.entry("Long", strategy.long, qty=longQty)
+    entryPrice  := close
+    initialSL   := longSL
+    riskDist    := close - longSL
+    origQty     := longQty
+    entryBar    := bar_index
+    hitR1 := false, hitR2 := false, hitR3 := false
+    pyramidDone := false, pyHitR2 := false, pyHitR3 := false
+    strategy.exit("LSL", "Long", stop=longSL)
+
+if goShort
+    strategy.entry("Short", strategy.short, qty=shortQty)
+    entryPrice  := close
+    initialSL   := shortSL
+    riskDist    := shortSL - close
+    origQty     := shortQty
+    entryBar    := bar_index
+    hitR1 := false, hitR2 := false, hitR3 := false
+    pyramidDone := false, pyHitR2 := false, pyHitR3 := false
+    strategy.exit("SSL", "Short", stop=shortSL)
+
+// =============================================================================
+// R-MULTIPLE EXITS — LONGS
+// =============================================================================
+
+if strategy.position_size > 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
+    float profit = close - entryPrice
+    int bars = bar_index - entryBar
+
+    // Time stop
+    if not hitR1 and bars >= timeStop and profit <= 0
+        strategy.close("Long", comment="Time stop")
+
+    // +R1: partial + pyramid
+    if not hitR1 and profit >= riskDist * exitR1
+        hitR1 := true
+        strategy.order("L+R1", strategy.short, qty=math.max(1, math.floor(origQty * exitPct1 / 100.0)), comment=str.tostring(exitR1, "#.##") + "R")
+        strategy.exit("LSL", "Long", stop=entryPrice)
+        if not pyramidDone
+            pyramidDone := true
+            pyEntry := close
+            pyRisk  := close - entryPrice
+            float pyRiskAmt = strategy.equity * math.min(equityPctAdd, equityPctMax - equityPctInit) / 100.0
+            pyQty := pyRisk > 0 ? math.max(1, math.floor(pyRiskAmt / pyRisk)) : 1
+            strategy.entry("Long", strategy.long, qty=pyQty)
+
+    // +R2: partial + trail SL
+    if not hitR2 and profit >= riskDist * exitR2
+        hitR2 := true
+        strategy.order("L+R2", strategy.short, qty=math.max(1, math.floor(origQty * exitPct2 / 100.0)), comment=str.tostring(exitR2, "#.##") + "R")
+        strategy.exit("LSL", "Long", stop=entryPrice + riskDist * 0.5)
+
+    // +R3: partial + trail SL tighter
+    if not hitR3 and profit >= riskDist * exitR3
+        hitR3 := true
+        strategy.order("L+R3", strategy.short, qty=math.max(1, math.floor(origQty * exitPct3 / 100.0)), comment=str.tostring(exitR3, "#.##") + "R")
+        strategy.exit("LSL", "Long", stop=entryPrice + riskDist)
+
+    // Pyramid partials
+    if pyramidDone and not na(pyEntry) and not na(pyRisk) and pyRisk > 0
+        float pp = close - pyEntry
+        if not pyHitR2 and pp >= pyRisk * exitR2
+            pyHitR2 := true
+            strategy.order("LP+R2", strategy.short, qty=math.max(1, math.floor(pyQty * exitPct2 / 100.0)), comment="Pyr " + str.tostring(exitR2, "#.##") + "R")
+        if not pyHitR3 and pp >= pyRisk * exitR3
+            pyHitR3 := true
+            strategy.order("LP+R3", strategy.short, qty=math.max(1, math.floor(pyQty * exitPct3 / 100.0)), comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
+
+    // Runner: close below EMA = done
+    if hitR2 and close < ema
+        strategy.close("Long", comment="Runner EMA exit")
+
+// =============================================================================
+// R-MULTIPLE EXITS — SHORTS
+// =============================================================================
+
+if strategy.position_size < 0 and not na(entryPrice) and not na(riskDist) and riskDist > 0
+    float profit = entryPrice - close
+    int bars = bar_index - entryBar
+
+    // Time stop
+    if not hitR1 and bars >= timeStop and profit <= 0
+        strategy.close("Short", comment="Time stop")
+
+    // +R1: partial + pyramid
+    if not hitR1 and profit >= riskDist * exitR1
+        hitR1 := true
+        strategy.order("S+R1", strategy.long, qty=math.max(1, math.floor(origQty * exitPct1 / 100.0)), comment=str.tostring(exitR1, "#.##") + "R")
+        strategy.exit("SSL", "Short", stop=entryPrice)
+        if not pyramidDone
+            pyramidDone := true
+            pyEntry := close
+            pyRisk  := entryPrice - close
+            float pyRiskAmt = strategy.equity * math.min(equityPctAdd, equityPctMax - equityPctInit) / 100.0
+            pyQty := pyRisk > 0 ? math.max(1, math.floor(pyRiskAmt / pyRisk)) : 1
+            strategy.entry("Short", strategy.short, qty=pyQty)
+
+    // +R2: partial + trail SL
+    if not hitR2 and profit >= riskDist * exitR2
+        hitR2 := true
+        strategy.order("S+R2", strategy.long, qty=math.max(1, math.floor(origQty * exitPct2 / 100.0)), comment=str.tostring(exitR2, "#.##") + "R")
+        strategy.exit("SSL", "Short", stop=entryPrice - riskDist * 0.5)
+
+    // +R3: partial + trail SL tighter
+    if not hitR3 and profit >= riskDist * exitR3
+        hitR3 := true
+        strategy.order("S+R3", strategy.long, qty=math.max(1, math.floor(origQty * exitPct3 / 100.0)), comment=str.tostring(exitR3, "#.##") + "R")
+        strategy.exit("SSL", "Short", stop=entryPrice - riskDist)
+
+    // Pyramid partials
+    if pyramidDone and not na(pyEntry) and not na(pyRisk) and pyRisk > 0
+        float pp = pyEntry - close
+        if not pyHitR2 and pp >= pyRisk * exitR2
+            pyHitR2 := true
+            strategy.order("SP+R2", strategy.long, qty=math.max(1, math.floor(pyQty * exitPct2 / 100.0)), comment="Pyr " + str.tostring(exitR2, "#.##") + "R")
+        if not pyHitR3 and pp >= pyRisk * exitR3
+            pyHitR3 := true
+            strategy.order("SP+R3", strategy.long, qty=math.max(1, math.floor(pyQty * exitPct3 / 100.0)), comment="Pyr " + str.tostring(exitR3, "#.##") + "R")
+
+    // Runner: close above EMA = done
+    if hitR2 and close > ema
+        strategy.close("Short", comment="Runner EMA exit")
+
+// =============================================================================
+// SIGNALS
+// =============================================================================
+
+if showSignals and goLong
+    label.new(bar_index, low, "BUY", style=label.style_label_up, color=color.new(color.blue, 10), textcolor=color.white, size=size.normal)
+if showSignals and goShort
+    label.new(bar_index, high, "SELL", style=label.style_label_down, color=color.new(color.orange, 10), textcolor=color.white, size=size.normal)
+
+bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na)
+
+// =============================================================================
+// DASHBOARD
+// =============================================================================
+
+if showDash and barstate.islast
+    var table d = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+
+    table.cell(d, 0, 0, "EMA Pullback", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
+    table.cell(d, 1, 0, "STRATEGY", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
+
+    string trend = uptrend ? "Uptrend" : downtrend ? "Downtrend" : "Neutral"
+    color tCol = uptrend ? color.green : downtrend ? color.red : color.gray
+    table.cell(d, 0, 1, "Trend", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 1, trend, text_color=tCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    string pos = strategy.position_size > 0 ? "LONG" : strategy.position_size < 0 ? "SHORT" : "Flat"
+    color pCol = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
+    table.cell(d, 0, 2, "Position", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 2, pos, text_color=pCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    table.cell(d, 0, 3, "Price", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 3, str.tostring(close, format.mintick), text_color=color.white, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    table.cell(d, 0, 4, "EMA " + str.tostring(emaPullback), text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 4, not na(ema) ? str.tostring(ema, format.mintick) : "—", text_color=color.new(#00BCD4, 0), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    float eqRisk = strategy.equity * equityPctInit / 100.0
+    table.cell(d, 0, 5, "Risk", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 5, str.tostring(equityPctInit, "#.#") + "% ($" + str.tostring(eqRisk, "#") + ")", text_color=color.red, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    float distToEMA = not na(ema) ? ((close - ema) / ema) * 100 : na
+    table.cell(d, 0, 6, "Dist to EMA", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 6, not na(distToEMA) ? str.tostring(distToEMA, "#.##") + "%" : "—", text_color=math.abs(nz(distToEMA)) < 1 ? color.yellow : color.white, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
+    string sig = goLong ? "BUY" : goShort ? "SELL" : "Waiting"
+    color sCol = goLong ? color.green : goShort ? color.red : color.gray
+    table.cell(d, 0, 7, "Signal", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 7, sig, text_color=sCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
