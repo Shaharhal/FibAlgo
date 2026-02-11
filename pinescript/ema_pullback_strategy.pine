@@ -31,6 +31,8 @@ useADX         = input.bool(false, "ADX Filter", group="Filters")
 adxThresh      = input.float(20.0, "ADX Threshold", minval=10, maxval=50, group="Filters")
 useVol         = input.bool(false, "Volume Filter", group="Filters")
 volMult        = input.float(1.3, "Volume Multiplier", minval=1.0, maxval=5.0, step=0.1, group="Filters")
+useBTCD        = input.bool(false, "BTC.D Filter (Alts)", group="Filters", tooltip="Only long alts when BTC dominance is falling. Turn ON for crypto alts, OFF for stocks/BTC.")
+btcdEmaLen     = input.int(50, "BTC.D EMA Length", minval=10, maxval=200, group="Filters")
 
 // Display
 showEMA        = input.bool(true, "Show EMA", group="Display")
@@ -69,6 +71,11 @@ bool volOK = not useVol or (not na(volSMA) and volume > volSMA * volMult)
 // ADX check
 bool adxOK = not useADX or adxVal > adxThresh
 
+// BTC.D filter — money flowing out of BTC into alts
+btcdClose = request.security("CRYPTOCAP:BTC.D", "D", close, barmerge.gaps_off, barmerge.lookahead_off)
+btcdEma   = request.security("CRYPTOCAP:BTC.D", "D", ta.ema(close, btcdEmaLen), barmerge.gaps_off, barmerge.lookahead_off)
+bool btcdOK = not useBTCD or (not na(btcdClose) and not na(btcdEma) and btcdClose < btcdEma)
+
 // =============================================================================
 // ENTRY — EMA PULLBACK BOUNCE
 // =============================================================================
@@ -82,7 +89,7 @@ bool bullCandle = close > open
 bool bearCandle = close < open
 
 // Pullback long: uptrend + wick touches EMA + closes above it + green candle
-bool pullbackLong = uptrend and not na(ema) and low <= ema and close > ema and bullCandle and volOK and adxOK and strategy.position_size == 0
+bool pullbackLong = uptrend and not na(ema) and low <= ema and close > ema and bullCandle and volOK and adxOK and btcdOK and strategy.position_size == 0
 
 // Pullback short: downtrend + wick touches EMA + closes below it + red candle
 bool pullbackShort = downtrend and not na(ema) and high >= ema and close < ema and bearCandle and volOK and adxOK and strategy.position_size == 0
@@ -275,7 +282,7 @@ bgcolor(strategy.position_size > 0 ? color.new(color.green, 95) : strategy.posit
 // =============================================================================
 
 if showDash and barstate.islast
-    var table d = table.new(position.top_right, 2, 8, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
+    var table d = table.new(position.top_right, 2, 9, bgcolor=color.new(#1a1a2e, 10), border_width=1, border_color=color.new(#16213e, 10), frame_width=3, frame_color=color.new(#0f3460, 10))
 
     table.cell(d, 0, 0, "EMA Pullback", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
     table.cell(d, 1, 0, "STRATEGY", text_color=color.white, text_size=size.large, bgcolor=color.new(#0f3460, 0))
@@ -304,7 +311,12 @@ if showDash and barstate.islast
     table.cell(d, 0, 6, "Dist to EMA", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
     table.cell(d, 1, 6, not na(distToEMA) ? str.tostring(distToEMA, "#.##") + "%" : "—", text_color=math.abs(nz(distToEMA)) < 1 ? color.yellow : color.white, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
 
+    string btcdTxt = not useBTCD ? "Off" : btcdOK ? "Alts GO" : "BTC mode"
+    color btcdCol = not useBTCD ? color.gray : btcdOK ? color.green : color.red
+    table.cell(d, 0, 7, "BTC.D", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 7, btcdTxt, text_color=btcdCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+
     string sig = goLong ? "BUY" : goShort ? "SELL" : "Waiting"
     color sCol = goLong ? color.green : goShort ? color.red : color.gray
-    table.cell(d, 0, 7, "Signal", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
-    table.cell(d, 1, 7, sig, text_color=sCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 0, 8, "Signal", text_color=color.new(color.white, 30), text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
+    table.cell(d, 1, 8, sig, text_color=sCol, text_size=size.normal, bgcolor=color.new(#1a1a2e, 0))
